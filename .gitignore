@@ -1,0 +1,5 @@
+*~
+*.sw[po]
+server.crt
+server.csr
+server.key
