@@ -48,6 +48,11 @@ type (
 		Length uint16
 		Data   []byte
 	}
+
+	SignatureAlgorithmsExtension struct {
+		Length                       uint16
+		SupportedSignatureAlgorithms []uint16
+	}
 )
 
 const (
@@ -68,24 +73,48 @@ const (
 	Finished    HandShakeType = 20
 
 	// https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml
-	SupportedPointFormatsExtension = 11
-	SupportedGroupsExtension       = 10
-	SessionTicketExtension         = 35
-	EncryptThenMacExtension        = 22
-	ExtendedMasterSecretExtension  = 23
-	SignatureAlgorithmsExtension   = 13
+	SupportedPointFormatsExtensionType = 11
+	SupportedGroupsExtensionType       = 10
+	SessionTicketExtensionType         = 35
+	EncryptThenMacExtensionType        = 22
+	ExtendedMasterSecretExtensionType  = 23
+	SignatureAlgorithmsExtensionType   = 13
+	SupportedVersionsExtensionType     = 43
+	PSKKeyExchangeModesExtensionType   = 45
+	KeyShareExtensionType              = 51
 )
 
 var ExtensionName = map[ExtensionType]string{
-	SupportedPointFormatsExtension: "Supported Point Formats",
-	SupportedGroupsExtension:       "Supported Groups",
-	SignatureAlgorithmsExtension:   "Signature Algorithms",
-	SessionTicketExtension:         "Session Ticket",
-	EncryptThenMacExtension:        "Encrypt-then-MAC",
-	ExtendedMasterSecretExtension:  "Extended Master Secret",
-	SupportedVersionsExtension:     "Supported Versions",
-	PSKKeyExchangeModesExtension:   "PSK Key Exchange Modes",
-	KeyShareExtension:              "Key Share",
+	SupportedPointFormatsExtensionType: "Supported Point Formats",
+	SupportedGroupsExtensionType:       "Supported Groups",
+	SignatureAlgorithmsExtensionType:   "Signature Algorithms",
+	SessionTicketExtensionType:         "Session Ticket",
+	EncryptThenMacExtensionType:        "Encrypt-then-MAC",
+	ExtendedMasterSecretExtensionType:  "Extended Master Secret",
+	SupportedVersionsExtensionType:     "Supported Versions",
+	PSKKeyExchangeModesExtensionType:   "PSK Key Exchange Modes",
+	KeyShareExtensionType:              "Key Share",
+}
+
+// 04030503060308070808081a081b081c0809080a080b080408050806040105010601
+var SignatureAlgorithmName = map[uint16]string{
+	0x0403: "ecdsa_secp256r1_sha256",
+	0x0503: "ecdsa_secp384r1_sha384",
+	0x0603: "ecdsa_secp521r1_sha512",
+	0x0807: "ed25519",
+	0x0808: "ed448",
+	0x0809: "rsa_pss_pss_sha256",
+	0x080a: "rsa_pss_pss_sha384",
+	0x080b: "rsa_pss_pss_sha512",
+	0x081a: "ecdsa_brainpoolP256r1tls13_sha256",
+	0x081b: "ecdsa_brainpoolP384r1tls13_sha384",
+	0x081c: "ecdsa_brainpoolP512r1tls13_sha512",
+	0x0804: "rsa_pss_rsae_sha256",
+	0x0805: "rsa_pss_rsae_sha384",
+	0x0806: "rsa_pss_rsae_sha512",
+	0x0401: "rsa_pkcs1_sha256",
+	0x0501: "rsa_pkcs1_sha384",
+	0x0601: "rsa_pkcs1_sha512",
 }
 
 // NewServerHelloMessage は新しいServerHelloメッセージを生成します。
@@ -200,7 +229,7 @@ func handleConnection(conn net.Conn) {
 			extensionLength := binary.BigEndian.Uint16(clientHelloBuffer[extensionOffset : extensionOffset+2])
 			fmt.Printf("ExtensionLength: %d\n", extensionLength)
 
-			// https://tex2e.github.io/rfc-translater/html/rfc4492.html Supported Point Formats Extension (Extension Type 11)
+			// https://tex2e.github.io/rfc-translater/html/rfc8422.html#5-1-2--Supported-Point-Formats-Extension Supported Point Formats Extension (Extension Type 11)
 			var extensions []Extension
 			cursor := extensionOffset + 2
 			for cursor < extensionOffset+2+int(extensionLength) {
@@ -211,10 +240,20 @@ func handleConnection(conn net.Conn) {
 					Data:   clientHelloBuffer[cursor+4 : cursor+4+int(length)],
 				}
 				extensions = append(extensions, extension)
-				// fmt.Printf("Extension type: %d\n", extension.Type)
 				fmt.Printf("Extension type: %s (%d)\n", ExtensionName[extension.Type], extension.Type)
 				fmt.Printf("Extension length: %d\n", length)
-				fmt.Printf("Extension data: %x\n\n", clientHelloBuffer[cursor+4:cursor+4+int(length)])
+				if extension.Type == SignatureAlgorithmsExtensionType {
+					length := binary.BigEndian.Uint16(clientHelloBuffer[cursor+4 : cursor+6])
+					var signatureAlgorithms []uint16
+					for i := 0; i < int(length); i += 2 {
+						signatureAlgorithm := binary.BigEndian.Uint16(clientHelloBuffer[cursor+6+i : cursor+6+i+2])
+						signatureAlgorithms = append(signatureAlgorithms, signatureAlgorithm)
+						fmt.Printf("Signature algorithm: %s (%x)\n", SignatureAlgorithmName[signatureAlgorithm], signatureAlgorithm)
+					}
+					fmt.Println()
+				} else {
+					fmt.Printf("Extension data: %x\n\n", clientHelloBuffer[cursor+4:cursor+4+int(length)])
+				}
 				cursor += 4 + int(length)
 			}
 
