@@ -49,9 +49,30 @@ type (
 		Data   []byte
 	}
 
+	SupportedPointFormatsExtension struct {
+		Length         uint8
+		ECPointFormats []uint8
+	}
+
+	SupportedGroupExtension struct {
+		Length         uint16
+		NamedGroupList []uint16
+	}
+
 	SignatureAlgorithmsExtension struct {
 		Length                       uint16
 		SupportedSignatureAlgorithms []uint16
+	}
+
+	KeyShareEntry struct {
+		Group           uint16
+		Length          uint16
+		KeyExchangeData []byte
+	}
+
+	KeyShareExtension struct {
+		Length       uint16
+		ClientShares []KeyShareEntry
 	}
 )
 
@@ -73,30 +94,62 @@ const (
 	Finished    HandShakeType = 20
 
 	// https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml
-	SupportedPointFormatsExtensionType = 11
-	SupportedGroupsExtensionType       = 10
-	SessionTicketExtensionType         = 35
-	EncryptThenMacExtensionType        = 22
-	ExtendedMasterSecretExtensionType  = 23
-	SignatureAlgorithmsExtensionType   = 13
-	SupportedVersionsExtensionType     = 43
-	PSKKeyExchangeModesExtensionType   = 45
-	KeyShareExtensionType              = 51
+	ServerNameExtensionType                 = 0
+	StatusRequestExtensionType              = 5
+	SupportedPointFormatsExtensionType      = 11
+	SupportedGroupsExtensionType            = 10
+	ApplicationLayerProtocolNegotiationType = 16
+	SignedCertificateTimestampExtensionType = 18
+	CompressCertificateExtensionType        = 27
+	SessionTicketExtensionType              = 35
+	EncryptThenMacExtensionType             = 22
+	ExtendedMasterSecretExtensionType       = 23
+	SignatureAlgorithmsExtensionType        = 13
+	SupportedVersionsExtensionType          = 43
+	PSKKeyExchangeModesExtensionType        = 45
+	KeyShareExtensionType                   = 51
+	EncryptedClientHelloExtensionType       = 65037
+	RenegotiationInfoExtensionType          = 65281
 )
 
 var ExtensionName = map[ExtensionType]string{
-	SupportedPointFormatsExtensionType: "Supported Point Formats",
-	SupportedGroupsExtensionType:       "Supported Groups",
-	SignatureAlgorithmsExtensionType:   "Signature Algorithms",
-	SessionTicketExtensionType:         "Session Ticket",
-	EncryptThenMacExtensionType:        "Encrypt-then-MAC",
-	ExtendedMasterSecretExtensionType:  "Extended Master Secret",
-	SupportedVersionsExtensionType:     "Supported Versions",
-	PSKKeyExchangeModesExtensionType:   "PSK Key Exchange Modes",
-	KeyShareExtensionType:              "Key Share",
+	ServerNameExtensionType:                 "Server Name",
+	StatusRequestExtensionType:              "Status Request",
+	SupportedPointFormatsExtensionType:      "Supported Point Formats",
+	SupportedGroupsExtensionType:            "Supported Groups",
+	ApplicationLayerProtocolNegotiationType: "Application Layer Protocol Negotiation",
+	SignedCertificateTimestampExtensionType: "Signed Certificate Timestamp",
+	CompressCertificateExtensionType:        "Compress Certificate",
+	SignatureAlgorithmsExtensionType:        "Signature Algorithms",
+	SessionTicketExtensionType:              "Session Ticket",
+	EncryptThenMacExtensionType:             "Encrypt-then-MAC",
+	ExtendedMasterSecretExtensionType:       "Extended Master Secret",
+	SupportedVersionsExtensionType:          "Supported Versions",
+	PSKKeyExchangeModesExtensionType:        "PSK Key Exchange Modes",
+	KeyShareExtensionType:                   "Key Share",
+	EncryptedClientHelloExtensionType:       "Encrypted Client Hello",
+	RenegotiationInfoExtensionType:          "Renegotiation Info",
 }
 
-// 04030503060308070808081a081b081c0809080a080b080408050806040105010601
+var ECPointFormatName = map[uint8]string{
+	0: "uncompressed",
+	1: "ansiX962_compressed_prime",
+	2: "ansiX962_compressed_char2",
+}
+
+var NamedGroupName = map[uint16]string{
+	0x0017: "secp256r1",
+	0x0018: "secp384r1",
+	0x0019: "secp521r1",
+	0x001d: "x25519",
+	0x001e: "x448",
+	0x0100: "ffdhe2048",
+	0x0101: "ffdhe3072",
+	0x0102: "ffdhe4096",
+	0x0103: "ffdhe6144",
+	0x0104: "ffdhe8192",
+}
+
 var SignatureAlgorithmName = map[uint16]string{
 	0x0403: "ecdsa_secp256r1_sha256",
 	0x0503: "ecdsa_secp384r1_sha384",
@@ -207,7 +260,6 @@ func handleConnection(conn net.Conn) {
 			clientHelloBuffer := tlsRecord.Fragment[4 : 4+handShake.Length]
 			legacyVersion := ProtocolVersion(binary.BigEndian.Uint16(clientHelloBuffer[0:2])) // 2 bytes
 			fmt.Printf("Legacy version: %x\n", legacyVersion)
-			fmt.Println(len(clientHelloBuffer))
 			random := hex.EncodeToString(clientHelloBuffer[2:34]) // 32 bytes
 			fmt.Printf("Random: %s\n", random)
 			legacySessionIDLength := uint8(clientHelloBuffer[34]) // 1 byte
@@ -242,18 +294,78 @@ func handleConnection(conn net.Conn) {
 				extensions = append(extensions, extension)
 				fmt.Printf("Extension type: %s (%d)\n", ExtensionName[extension.Type], extension.Type)
 				fmt.Printf("Extension length: %d\n", length)
-				if extension.Type == SignatureAlgorithmsExtensionType {
-					length := binary.BigEndian.Uint16(clientHelloBuffer[cursor+4 : cursor+6])
+				switch extension.Type {
+				case SupportedPointFormatsExtensionType:
+					length := uint8(extension.Data[0])
+					var ECPointFormats []uint8
+					for i := 0; i < int(length); i++ {
+						ECPointFormat := uint8(extension.Data[1+i])
+						ECPointFormats = append(ECPointFormats, ECPointFormat)
+						fmt.Printf("  ECPointFormat: %s (%x)\n", ECPointFormatName[ECPointFormat], ECPointFormat)
+					}
+				case SupportedGroupsExtensionType:
+					length := binary.BigEndian.Uint16(extension.Data[0:2])
+					var NamedGroupList []uint16
+					for i := 0; i < int(length); i += 2 {
+						NamedGroup := binary.BigEndian.Uint16(extension.Data[2+i : 2+i+2])
+						NamedGroupList = append(NamedGroupList, NamedGroup)
+						fmt.Printf("  Named Group: %s (%x)\n", NamedGroupName[NamedGroup], NamedGroup)
+					}
+				case SignatureAlgorithmsExtensionType:
+					length := binary.BigEndian.Uint16(extension.Data[0:2])
+					fmt.Println("length signature algoriths extension", length)
 					var signatureAlgorithms []uint16
 					for i := 0; i < int(length); i += 2 {
-						signatureAlgorithm := binary.BigEndian.Uint16(clientHelloBuffer[cursor+6+i : cursor+6+i+2])
+						signatureAlgorithm := binary.BigEndian.Uint16(extension.Data[2+i : 2+i+2])
 						signatureAlgorithms = append(signatureAlgorithms, signatureAlgorithm)
-						fmt.Printf("Signature algorithm: %s (%x)\n", SignatureAlgorithmName[signatureAlgorithm], signatureAlgorithm)
+						fmt.Printf("  Signature algorithm: %s (%x)\n", SignatureAlgorithmName[signatureAlgorithm], signatureAlgorithm)
 					}
-					fmt.Println()
-				} else {
-					fmt.Printf("Extension data: %x\n\n", clientHelloBuffer[cursor+4:cursor+4+int(length)])
+				case KeyShareExtensionType:
+					// 33 Extension Type = key share
+					// 00 26 Extension Length = 38
+					// 00 24 Key Share Entry Length = 36
+					// 00 1d 00 20 74 f9 64-f7 c7 d9 8a 47 d0 2c ae 6c bb 9f 24 49 3c 85 59-ef 98 76 bc 8e 3d 1e f8 34 46 78 3e 5e
+					length := binary.BigEndian.Uint16(extension.Data[0:2])
+					fmt.Println("length key share extension", length)
+					var clientShares []KeyShareEntry
+					keyShareCursor := 2
+					for keyShareCursor < int(length) {
+						group := binary.BigEndian.Uint16(extension.Data[keyShareCursor : keyShareCursor+2])
+						keyExchangeDataLength := binary.BigEndian.Uint16(extension.Data[keyShareCursor+2 : keyShareCursor+4])
+						clientShare := KeyShareEntry{
+							Group:           group,
+							Length:          keyExchangeDataLength,
+							KeyExchangeData: extension.Data[keyShareCursor+4 : keyShareCursor+4+int(keyExchangeDataLength)],
+						}
+						clientShares = append(clientShares, clientShare)
+						fmt.Printf("  Group: %s (%x)\n", NamedGroupName[group], group)
+						fmt.Printf("  Length: %d\n", keyExchangeDataLength)
+						fmt.Printf("  KeyExchangeData: %x\n", clientShare.KeyExchangeData)
+						keyShareCursor += 4 + int(keyExchangeDataLength)
+					}
+
+					// for cursor < extensionOffset+2+int(extensionLength) {
+					// 	cursor += 6
+					// 	group := binary.BigEndian.Uint16(extension.Data[cursor : cursor+2])
+					// 	keyExchangeDataLength := binary.BigEndian.Uint16(clientHelloBuffer[cursor+2 : cursor+4])
+
+					// 	keyExchangeData := clientHelloBuffer[cursor+4 : cursor+4+int(keyExchangeDataLength)]
+					// 	clientShare := KeyShareEntry{
+					// 		Group:           group,
+					// 		KeyExchangeData: keyExchangeData,
+					// 	}
+					// 	clientShares = append(clientShares, clientShare)
+					// 	fmt.Printf("  Group: %s (%x)\n", NamedGroupName[group], group)
+					// 	fmt.Printf("  KeyExchangeData: %x\n", keyExchangeData)
+					// 	cursor += 4 + int(keyExchangeDataLength)
+					// }
+
+				default:
+					if length > 0 {
+						fmt.Printf("Extension data: %x\n", clientHelloBuffer[cursor+4:cursor+4+int(length)])
+					}
 				}
+				fmt.Println()
 				cursor += 4 + int(length)
 			}
 
