@@ -1,36 +1,34 @@
 package tls13
 
 import (
+	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
+	"os"
 )
 
 // ServerHelloMessage はServerHelloメッセージの構造を模倣します。
 type (
+	Serializable interface {
+		ToBytes() []byte
+	}
+
 	ContentType     uint8
 	ProtocolVersion uint16
 	HandShakeType   uint8
 	ExtensionType   uint16
 
-	ServerHelloMessage struct {
-		ProtocolVersion   string
-		RandomBytes       string
-		SessionID         string // TLS 1.3では通常空
-		CipherSuite       string
-		CompressionMethod string
-		Extensions        []string
-	}
 	TLSPlainText struct {
 		TLSContentType      ContentType
 		LegacyRecordVersion ProtocolVersion
 		Length              uint16
 		Fragment            []byte
 	}
-	HandShakeMessage[T any] struct {
+	HandShakeMessage[T Serializable] struct {
 		MsgType HandShakeType
 		Length  uint32
 		Message T
@@ -42,11 +40,23 @@ type (
 		LegacyCompressionMethod string
 		Extensions              []string
 	}
+	ServerHelloMessage struct {
+		LegacyVersion     ProtocolVersion
+		RandomBytes       [32]byte
+		SessionID         []byte
+		CipherSuite       uint16
+		CompressionMethod uint8
+		Extensions        []Extension
+	}
 
 	Extension struct {
 		Type   ExtensionType
 		Length uint16
 		Data   []byte
+	}
+
+	SupportedVersionsExtension struct {
+		SelectedVersion ProtocolVersion
 	}
 
 	SupportedPointFormatsExtension struct {
@@ -77,21 +87,22 @@ type (
 )
 
 const (
-	Invalid          ContentType = 0
-	ChangeCipherSpec ContentType = 20
-	Alert            ContentType = 21
-	Handshake        ContentType = 22
-	ApplicationData  ContentType = 23
+	Invalid          ContentType = 0x00
+	ChangeCipherSpec ContentType = 0x14
+	Alert            ContentType = 0x15
+	Handshake        ContentType = 0x16
+	ApplicationData  ContentType = 0x17
 
 	TLS10 ProtocolVersion = 0x0301
 	TLS11 ProtocolVersion = 0x0302
 	TLS12 ProtocolVersion = 0x0303
 	TLS13 ProtocolVersion = 0x0304
 
-	ClientHello HandShakeType = 1
-	ServerHello HandShakeType = 2
-	Certificate HandShakeType = 11
-	Finished    HandShakeType = 20
+	ClientHello       HandShakeType = 0x01
+	ServerHello       HandShakeType = 0x02
+	Certificate       HandShakeType = 0x0b
+	CertificateVerify HandShakeType = 0x0f
+	Finished          HandShakeType = 0x14
 
 	// https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml
 	ServerNameExtensionType                 = 0
@@ -111,6 +122,32 @@ const (
 	EncryptedClientHelloExtensionType       = 65037
 	RenegotiationInfoExtensionType          = 65281
 )
+
+// https://tex2e.github.io/rfc-translater/html/rfc8422.html#6--Cipher-Suites
+// https://tex2e.github.io/rfc-translater/html/rfc7905.html
+// https://datatracker.ietf.org/doc/html/rfc5288
+// https://tex2e.github.io/rfc-translater/html/rfc5246.html#A-5--The-Cipher-Suite
+var CipherSuiteName = map[uint16]string{
+	0x1301: "TLS_AES_128_GCM_SHA256",
+	0x1302: "TLS_AES_256_GCM_SHA384",
+	0x1303: "TLS_CHACHA20_POLY1305_SHA256",
+	0x1304: "TLS_AES_128_CCM_SHA256",
+	0x1305: "TLS_AES_128_CCM_8_SHA256",
+	0xc02b: "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+	0xc02c: "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+	0xc02f: "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+	0xc030: "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+	0xc013: "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+	0xc014: "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+	0x009c: "TLS_RSA_WITH_AES_128_GCM_SHA256",
+	0x009d: "TLS_RSA_WITH_AES_256_GCM_SHA384",
+
+	0x002f: "TLS_RSA_WITH_AES_128_CBC_SHA",
+	0x0035: "TLS_RSA_WITH_AES_256_CBC_SHA",
+
+	0xcca8: "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+	0xcca9: "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+}
 
 var ExtensionName = map[ExtensionType]string{
 	ServerNameExtensionType:                 "Server Name",
@@ -170,32 +207,76 @@ var SignatureAlgorithmName = map[uint16]string{
 	0x0601: "rsa_pkcs1_sha512",
 }
 
-// NewServerHelloMessage は新しいServerHelloメッセージを生成します。
-func NewServerHelloMessage() *ServerHelloMessage {
-	return &ServerHelloMessage{
-		ProtocolVersion:   "TLS 1.3",
-		RandomBytes:       generateRandomBytes(32),
-		SessionID:         "",
-		CipherSuite:       "TLS_AES_128_GCM_SHA256",
-		CompressionMethod: "null",
-		Extensions:        []string{}, // ここに必要な拡張を追加
-	}
+func (t TLSPlainText) ToBytes() []byte {
+	return append([]byte{
+		byte(uint8(t.TLSContentType)),
+		byte(uint8(t.LegacyRecordVersion >> 8)),
+		byte(uint8(t.LegacyRecordVersion)),
+		byte(uint8(t.Length >> 8)),
+		byte(uint8(t.Length)),
+	}, t.Fragment...)
 }
 
-// generateRandomBytes は指定された長さのランダムバイト列を生成します。
-func generateRandomBytes(length int) string {
-	bytes := make([]byte, length)
-	_, err := rand.Read(bytes)
-	if err != nil {
-		panic("failed to generate random bytes")
-	}
-	return hex.EncodeToString(bytes)
+func (ch ClientHelloMessage) ToBytes() []byte {
+	return []byte{}
 }
 
-// func main() {
-// 	serverHello := NewServerHelloMessage()
-// 	fmt.Printf("ServerHello: %+v\n", serverHello)
-// }
+func (sh ServerHelloMessage) ToBytes() []byte {
+	serverHello := []byte{}
+	serverHello = append(serverHello, byte(uint8(sh.LegacyVersion>>8)))
+	serverHello = append(serverHello, byte(uint8(sh.LegacyVersion)))
+	serverHello = append(serverHello, sh.RandomBytes[:]...)
+	serverHello = append(serverHello, byte(uint8(len(sh.SessionID))))
+	serverHello = append(serverHello, sh.SessionID...)
+	serverHello = append(serverHello, byte(uint8(sh.CipherSuite>>8)))
+	serverHello = append(serverHello, byte(uint8(sh.CipherSuite)))
+	serverHello = append(serverHello, sh.CompressionMethod)
+
+	// length as uint16
+	extensionLength := 0
+	for _, extension := range sh.Extensions {
+		extensionLength += 4 + int(extension.Length)
+	}
+
+	serverHello = append(serverHello, byte(uint8(extensionLength>>8)))
+	serverHello = append(serverHello, byte(uint8(extensionLength)))
+	for _, extension := range sh.Extensions {
+		serverHello = append(serverHello, extension.ToBytes()...)
+	}
+	return serverHello
+}
+
+func (hs HandShakeMessage[T]) ToBytes() []byte {
+	handShake := []byte{}
+	handShake = append(handShake, byte(uint8(hs.MsgType)))
+	handShake = append(handShake, byte(uint8(hs.Length>>16)))
+	handShake = append(handShake, byte(uint8(hs.Length>>8)))
+	handShake = append(handShake, byte(uint8(hs.Length)))
+	handShake = append(handShake, hs.Message.ToBytes()...)
+	return handShake
+}
+
+func (e Extension) ToBytes() []byte {
+	extension := []byte{}
+	extension = append(extension, byte(uint8(e.Type>>8)))
+	extension = append(extension, byte(uint8(e.Type)))
+	extension = append(extension, byte(uint8(e.Length>>8)))
+	extension = append(extension, byte(uint8(e.Length)))
+	extension = append(extension, e.Data...)
+	return extension
+}
+
+func (kse KeyShareExtension) ToBytes() []byte {
+	extension := []byte{}
+	for _, clientShare := range kse.ClientShares {
+		extension = append(extension, byte(uint8(clientShare.Group>>8)))
+		extension = append(extension, byte(uint8(clientShare.Group)))
+		extension = append(extension, byte(uint8(clientShare.Length>>8)))
+		extension = append(extension, byte(uint8(clientShare.Length)))
+		extension = append(extension, clientShare.KeyExchangeData...)
+	}
+	return extension
+}
 
 func Server() {
 	listener, err := net.Listen("tcp", ":443")
@@ -239,6 +320,7 @@ func handleConnection(conn net.Conn) {
 		Fragment:            header[5 : 5+length],
 	}
 
+	var handShakeResponse TLSPlainText
 	if tlsRecord.TLSContentType == Handshake { // 22 stands for Handshake record type
 		fmt.Println("Received TLS Handshake message")
 		fmt.Printf("Legacy version: %x\n", tlsRecord.LegacyRecordVersion)
@@ -264,13 +346,13 @@ func handleConnection(conn net.Conn) {
 			fmt.Printf("Random: %s\n", random)
 			legacySessionIDLength := uint8(clientHelloBuffer[34]) // 1 byte
 			fmt.Printf("LegacySessionIDLength: %d\n", legacySessionIDLength)
-			legacySessionID := hex.EncodeToString(clientHelloBuffer[35 : 35+legacySessionIDLength])
-			fmt.Printf("LegacySessionID: %s\n", legacySessionID)
+			legacySessionID := clientHelloBuffer[35 : 35+legacySessionIDLength]
+			fmt.Printf("LegacySessionID: %x\n", legacySessionID)
 			cipherSuiteLength := binary.BigEndian.Uint16(clientHelloBuffer[35+legacySessionIDLength : 35+legacySessionIDLength+2]) // 2 bytes
 			fmt.Printf("CipherSuiteLength: %d\n", cipherSuiteLength)
 			for i := 0; i < int(cipherSuiteLength); i += 2 {
 				cipherSuite := binary.BigEndian.Uint16(clientHelloBuffer[35+int(legacySessionIDLength)+2+i : 35+int(legacySessionIDLength)+2+i+2])
-				fmt.Printf("CipherSuite: %x\n", cipherSuite)
+				fmt.Printf("  CipherSuite: %s (%x)\n", CipherSuiteName[cipherSuite], cipherSuite)
 			}
 			legacyCompressionMethodLength := uint8(clientHelloBuffer[35+int(legacySessionIDLength)+2+int(cipherSuiteLength)])
 			fmt.Printf("LegacyCompressionMethodLength: %d\n", legacyCompressionMethodLength)
@@ -279,6 +361,7 @@ func handleConnection(conn net.Conn) {
 			fmt.Printf("LegacyCompressionMethod: %d\n", legacyCompressionMethod)
 			extensionOffset := 35 + int(legacySessionIDLength) + 2 + int(cipherSuiteLength) + 1 + int(legacyCompressionMethodLength)
 			extensionLength := binary.BigEndian.Uint16(clientHelloBuffer[extensionOffset : extensionOffset+2])
+			fmt.Println()
 			fmt.Printf("ExtensionLength: %d\n", extensionLength)
 
 			// https://tex2e.github.io/rfc-translater/html/rfc8422.html#5-1-2--Supported-Point-Formats-Extension Supported Point Formats Extension (Extension Type 11)
@@ -313,7 +396,7 @@ func handleConnection(conn net.Conn) {
 					}
 				case SignatureAlgorithmsExtensionType:
 					length := binary.BigEndian.Uint16(extension.Data[0:2])
-					fmt.Println("length signature algoriths extension", length)
+					fmt.Println("Signature algoriths extension length:", length)
 					var signatureAlgorithms []uint16
 					for i := 0; i < int(length); i += 2 {
 						signatureAlgorithm := binary.BigEndian.Uint16(extension.Data[2+i : 2+i+2])
@@ -321,12 +404,8 @@ func handleConnection(conn net.Conn) {
 						fmt.Printf("  Signature algorithm: %s (%x)\n", SignatureAlgorithmName[signatureAlgorithm], signatureAlgorithm)
 					}
 				case KeyShareExtensionType:
-					// 33 Extension Type = key share
-					// 00 26 Extension Length = 38
-					// 00 24 Key Share Entry Length = 36
-					// 00 1d 00 20 74 f9 64-f7 c7 d9 8a 47 d0 2c ae 6c bb 9f 24 49 3c 85 59-ef 98 76 bc 8e 3d 1e f8 34 46 78 3e 5e
 					length := binary.BigEndian.Uint16(extension.Data[0:2])
-					fmt.Println("length key share extension", length)
+					fmt.Println("Key share extension length:", length)
 					var clientShares []KeyShareEntry
 					keyShareCursor := 2
 					for keyShareCursor < int(length) {
@@ -343,23 +422,6 @@ func handleConnection(conn net.Conn) {
 						fmt.Printf("  KeyExchangeData: %x\n", clientShare.KeyExchangeData)
 						keyShareCursor += 4 + int(keyExchangeDataLength)
 					}
-
-					// for cursor < extensionOffset+2+int(extensionLength) {
-					// 	cursor += 6
-					// 	group := binary.BigEndian.Uint16(extension.Data[cursor : cursor+2])
-					// 	keyExchangeDataLength := binary.BigEndian.Uint16(clientHelloBuffer[cursor+2 : cursor+4])
-
-					// 	keyExchangeData := clientHelloBuffer[cursor+4 : cursor+4+int(keyExchangeDataLength)]
-					// 	clientShare := KeyShareEntry{
-					// 		Group:           group,
-					// 		KeyExchangeData: keyExchangeData,
-					// 	}
-					// 	clientShares = append(clientShares, clientShare)
-					// 	fmt.Printf("  Group: %s (%x)\n", NamedGroupName[group], group)
-					// 	fmt.Printf("  KeyExchangeData: %x\n", keyExchangeData)
-					// 	cursor += 4 + int(keyExchangeDataLength)
-					// }
-
 				default:
 					if length > 0 {
 						fmt.Printf("Extension data: %x\n", clientHelloBuffer[cursor+4:cursor+4+int(length)])
@@ -368,11 +430,99 @@ func handleConnection(conn net.Conn) {
 				fmt.Println()
 				cursor += 4 + int(length)
 			}
+			serverHello, err := constructServerHello(legacySessionID)
+			if err != nil {
+				fmt.Println("Error constructing ServerHello message:", err)
+				return
+			}
+			serverHelloHandShake := HandShakeMessage[ServerHelloMessage]{
+				MsgType: ServerHello,
+				Length:  uint32(len(serverHello.ToBytes())),
+				Message: *serverHello,
+			}
 
+			handShakeResponse = TLSPlainText{
+				TLSContentType:      Handshake, // 0x16
+				LegacyRecordVersion: TLS12,     // 0x0303
+				Length:              uint16(len(serverHelloHandShake.ToBytes())),
+				Fragment:            serverHelloHandShake.ToBytes(),
+			}
+			fmt.Printf("ServerHello: %x\n", handShakeResponse.ToBytes())
+			conn.Write(handShakeResponse.ToBytes())
+			// TODO: implement Certificate
 		}
+
+		// fmt.Printf("ServerHello: %x\n", handShakeResponse.ToBytes())
+		// conn.Write(handShakeResponse.ToBytes())
 	}
 
 	// クライアントに対して簡単な応答を送信
-	response := "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
-	conn.Write([]byte(response))
+	// response := "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+	// conn.Write([]byte(response))
+}
+
+func constructCertificate() ([]byte, error) {
+	cert, err := os.ReadFile("server.crt")
+	if err != nil {
+		return nil, err
+	}
+	return cert, nil
+
+	// certPool := x509.NewCertPool()
+	// certPool.AppendCertsFromPEM(cert)
+
+	// config := &tls.Config{
+	// 	Certificates: []tls.Certificate{cert},
+	// 	// 他の設定...
+	// }
+
+}
+
+func constructServerHello(sessionID []byte) (*ServerHelloMessage, error) {
+	// ランダムデータの生成 (32バイト)
+	randomData := make([]byte, 32)
+	_, err := rand.Read(randomData)
+	if err != nil {
+		return nil, err
+	}
+
+	p256Curve := ecdh.P256()
+	privateKey, err := p256Curve.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	privateKey.PublicKey()
+	fmt.Printf("Private key:%x\n", privateKey.Bytes())
+	fmt.Printf("Public key:%x\n", privateKey.PublicKey().Bytes())
+
+	keyShareExtension := KeyShareExtension{
+		Length: 2 + 2 + uint16(len(privateKey.PublicKey().Bytes())),
+		ClientShares: []KeyShareEntry{
+			{
+				Group:           0x0017,
+				Length:          uint16(len(privateKey.PublicKey().Bytes())),
+				KeyExchangeData: privateKey.PublicKey().Bytes(),
+			},
+		},
+	}
+
+	return &ServerHelloMessage{
+		LegacyVersion:     TLS12,
+		RandomBytes:       [32]byte(randomData),
+		SessionID:         sessionID,
+		CipherSuite:       0x1301, // TLS_AES_128_GCM_SHA256
+		CompressionMethod: 0x00,
+		Extensions: []Extension{
+			{
+				Type:   SupportedVersionsExtensionType,
+				Length: 2,
+				Data:   []byte{0x03, 0x04}, // TLS 1.3
+			},
+			{
+				Type:   KeyShareExtensionType,
+				Length: keyShareExtension.Length,
+				Data:   keyShareExtension.ToBytes(),
+			},
+		},
+	}, nil
 }
