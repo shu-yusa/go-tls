@@ -36,6 +36,11 @@ type (
 		Length              uint16
 		Fragment            []byte
 	}
+	TLSInnerPlainText struct {
+		Content     []byte
+		ContentType uint8
+		Zeros       []byte
+	}
 
 	TLSCipherMessageText struct {
 		ContentType     ContentType
@@ -62,6 +67,9 @@ type (
 		CipherSuite       uint16
 		CompressionMethod uint8
 		Extensions        []Extension
+	}
+	EncryptedExtensionsMessage struct {
+		Extensions []Extension
 	}
 
 	Extension struct {
@@ -140,11 +148,12 @@ const (
 	TLS12 ProtocolVersion = 0x0303
 	TLS13 ProtocolVersion = 0x0304
 
-	ClientHello       HandshakeType = 0x01
-	ServerHello       HandshakeType = 0x02
-	Certificate       HandshakeType = 0x0b
-	CertificateVerify HandshakeType = 0x0f
-	Finished          HandshakeType = 0x14
+	ClientHello         HandshakeType = 0x01
+	ServerHello         HandshakeType = 0x02
+	EncryptedExtensions HandshakeType = 0x08
+	Certificate         HandshakeType = 0x0b
+	CertificateVerify   HandshakeType = 0x0f
+	Finished            HandshakeType = 0x14
 
 	X509         CertificateType = 0x01
 	RawPublicKey CertificateType = 0x02
@@ -259,6 +268,10 @@ func NewTLSCipherMessageText(encryptedRecord []byte) *TLSCipherMessageText {
 		Length:          uint16(len(encryptedRecord)),
 		EncryptedRecord: encryptedRecord,
 	}
+}
+
+func (t TLSInnerPlainText) ToBytes() []byte {
+	return append(append(t.Content, byte(t.ContentType)), t.Zeros...)
 }
 
 func (t TLSCipherMessageText) ToBytes() []byte {
@@ -623,20 +636,24 @@ func handleConnection(conn net.Conn) {
 				fmt.Println("Error constructing certificate:", err)
 				return
 			}
-			fmt.Printf("Certificate: %x\n\n", certificateMessage.ToBytes())
+			fmt.Printf("Certificate: %x\n", certificateMessage.ToBytes())
+			fmt.Printf("Certificate Length: %d\n\n", len(certificateMessage.ToBytes()))
 			// TODO: Encrypt the certificate to construct Certificate message
 			// AES_128_GCMで暗号化
-			encryptedHandshakeCertificateMessage, err := encryptCertificateMessage(serverWriteKey, serverWriteIV, HandshakeMessage[CertificateMessage]{
-				MsgType: Certificate,
-				Length:  uint32(len(certificateMessage.ToBytes())),
-				Message: *certificateMessage,
+			encryptedHandshakeCertificateMessage, err := encryptCertificateMessage(serverWriteKey, serverWriteIV, TLSInnerPlainText{
+				Content: HandshakeMessage[CertificateMessage]{
+					MsgType: Certificate,
+					Length:  uint32(len(certificateMessage.ToBytes())),
+					Message: *certificateMessage,
+				}.ToBytes(),
 			}.ToBytes())
 			if err != nil {
 				fmt.Println("Error encrypting message:", err)
 				return
 			}
 
-			fmt.Printf("Encrypted Message: %x\n\n", encryptedHandshakeCertificateMessage)
+			fmt.Printf("Encrypted Message: %x\n", encryptedHandshakeCertificateMessage)
+			fmt.Printf("Encrypted Message length: %d\n\n", len(encryptedHandshakeCertificateMessage))
 
 			certificateTLSRecord := NewTLSCipherMessageText(encryptedHandshakeCertificateMessage)
 			fmt.Printf("Certificate TLS Record: %x\n\n", certificateTLSRecord.ToBytes())

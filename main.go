@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+
+	"github.com/shu-yusa/go-tls/tls13"
 )
 
 func handler(w http.ResponseWriter, r *http.Request) {
@@ -33,6 +35,6 @@ func fullTLSServer() {
 }
 
 func main() {
-	// tls13.Server()
-	fullTLSServer()
+	tls13.Server()
+	// fullTLSServer()
 }
