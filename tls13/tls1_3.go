@@ -11,7 +11,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"hash"
-	"io"
 	"log"
 	"net"
 
@@ -21,7 +20,7 @@ import (
 // ServerHelloMessage はServerHelloメッセージの構造を模倣します。
 type (
 	Serializable interface {
-		ToBytes() []byte
+		Bytes() []byte
 	}
 
 	ContentType     uint8
@@ -38,7 +37,7 @@ type (
 	}
 	TLSInnerPlainText struct {
 		Content     []byte
-		ContentType uint8
+		ContentType ContentType
 		Zeros       []byte
 	}
 
@@ -270,11 +269,11 @@ func NewTLSCipherMessageText(encryptedRecord []byte) *TLSCipherMessageText {
 	}
 }
 
-func (t TLSInnerPlainText) ToBytes() []byte {
+func (t TLSInnerPlainText) Bytes() []byte {
 	return append(append(t.Content, byte(t.ContentType)), t.Zeros...)
 }
 
-func (t TLSCipherMessageText) ToBytes() []byte {
+func (t TLSCipherMessageText) Bytes() []byte {
 	return append([]byte{
 		byte(uint8(t.ContentType)),
 		byte(uint8(t.LegacyVersion >> 8)),
@@ -284,7 +283,7 @@ func (t TLSCipherMessageText) ToBytes() []byte {
 	}, t.EncryptedRecord...)
 }
 
-func (t TLSPlainText) ToBytes() []byte {
+func (t TLSPlainText) Bytes() []byte {
 	return append([]byte{
 		byte(uint8(t.TLSContentType)),
 		byte(uint8(t.LegacyRecordVersion >> 8)),
@@ -294,11 +293,11 @@ func (t TLSPlainText) ToBytes() []byte {
 	}, t.Fragment...)
 }
 
-func (ch ClientHelloMessage) ToBytes() []byte {
+func (ch ClientHelloMessage) Bytes() []byte {
 	return []byte{}
 }
 
-func (sh ServerHelloMessage) ToBytes() []byte {
+func (sh ServerHelloMessage) Bytes() []byte {
 	serverHello := []byte{}
 	serverHello = append(serverHello, byte(uint8(sh.LegacyVersion>>8)))
 	serverHello = append(serverHello, byte(uint8(sh.LegacyVersion)))
@@ -318,22 +317,36 @@ func (sh ServerHelloMessage) ToBytes() []byte {
 	serverHello = append(serverHello, byte(uint8(extensionLength>>8)))
 	serverHello = append(serverHello, byte(uint8(extensionLength)))
 	for _, extension := range sh.Extensions {
-		serverHello = append(serverHello, extension.ToBytes()...)
+		serverHello = append(serverHello, extension.Bytes()...)
 	}
 	return serverHello
 }
 
-func (hs HandshakeMessage[T]) ToBytes() []byte {
+func (hs HandshakeMessage[T]) Bytes() []byte {
 	handshake := []byte{}
 	handshake = append(handshake, byte(uint8(hs.MsgType)))
 	handshake = append(handshake, byte(uint8(hs.Length>>16)))
 	handshake = append(handshake, byte(uint8(hs.Length>>8)))
 	handshake = append(handshake, byte(uint8(hs.Length)))
-	handshake = append(handshake, hs.Message.ToBytes()...)
+	handshake = append(handshake, hs.Message.Bytes()...)
 	return handshake
 }
 
-func (e Extension) ToBytes() []byte {
+func (ee EncryptedExtensionsMessage) Bytes() []byte {
+	encryptedExtensions := []byte{}
+	extensionLength := 0
+	for _, extension := range ee.Extensions {
+		extensionLength += 4 + int(extension.Length)
+	}
+	encryptedExtensions = append(encryptedExtensions, byte(uint8(extensionLength>>8)))
+	encryptedExtensions = append(encryptedExtensions, byte(uint8(extensionLength)))
+	for _, extension := range ee.Extensions {
+		encryptedExtensions = append(encryptedExtensions, extension.Bytes()...)
+	}
+	return encryptedExtensions
+}
+
+func (e Extension) Bytes() []byte {
 	extension := []byte{}
 	extension = append(extension, byte(uint8(e.Type>>8)))
 	extension = append(extension, byte(uint8(e.Type)))
@@ -343,7 +356,7 @@ func (e Extension) ToBytes() []byte {
 	return extension
 }
 
-func (kse KeyShareExtension) ToBytes() []byte {
+func (kse KeyShareExtension) Bytes() []byte {
 	extension := []byte{}
 	for _, clientShare := range kse.ClientShares {
 		extension = append(extension, byte(uint8(clientShare.Group>>8)))
@@ -355,72 +368,47 @@ func (kse KeyShareExtension) ToBytes() []byte {
 	return extension
 }
 
-func (l HKDFLabel) ToBytes() []byte {
+func (l HKDFLabel) Bytes() []byte {
 	label := []byte{}
 	label = append(label, byte(uint8(l.Length>>8)))
 	label = append(label, byte(uint8(l.Length)))
 	// "tls13 "プレフィックスとLabelを連結し、バイトに変換
-	labelBytes := []byte("tls13 " + l.Label)
+	labelBytes := []byte(l.Label)
 	// Labelの長さを先頭に追加
 	label = append(label, byte(len(labelBytes)))
 	label = append(label, labelBytes...)
 
-	// Contextをバイトに変換
-	contextBytes := []byte(l.Context)
 	// Contextの長さを先頭に追加
-	label = append(label, byte(len(contextBytes)))
-	label = append(label, contextBytes...)
+	label = append(label, byte(len(l.Context)))
+	label = append(label, l.Context...)
 	return label
 }
 
 func (s *Secrets) HandshakeKeys(clientHello []byte, serverHello []byte, keyLength int, ivLength int) ([]byte, []byte, error) {
-	messages := sha256.Sum256(append(clientHello, serverHello...))
-	hkdfExpand := hkdf.Expand(s.Hash, s.HandshakeSecret, HKDFLabel{
-		Length:  32,
-		Label:   "c hs traffic",
-		Context: messages[:],
-	}.ToBytes())
-
-	clientHandshakeTrafficSecret := make([]byte, 32)
-	_, err := hkdfExpand.Read(clientHandshakeTrafficSecret)
+	clientHandshakeTrafficSecret, err := DeriveSecret(s.Hash, s.HandshakeSecret, "c hs traffic", [][]byte{clientHello, serverHello})
 	if err != nil {
 		return nil, nil, err
 	}
+	fmt.Printf("Client Handshake Traffic Secret: %x\n", clientHandshakeTrafficSecret)
 
-	hkdfExpand = hkdf.Expand(s.Hash, s.HandshakeSecret, HKDFLabel{
-		Length:  32,
-		Label:   "s hs traffic",
-		Context: messages[:],
-	}.ToBytes())
-
-	serverHandshakeTrafficSecret := make([]byte, 32)
-	if _, err := hkdfExpand.Read(serverHandshakeTrafficSecret); err != nil {
+	serverHandshakeTrafficSecret, err := DeriveSecret(s.Hash, s.HandshakeSecret, "s hs traffic", [][]byte{clientHello, serverHello})
+	if err != nil {
 		return nil, nil, err
 	}
 	fmt.Printf("Server Handshake Traffic Secret: %x\n", serverHandshakeTrafficSecret)
 
-	hkdfExpand = hkdf.Expand(s.Hash, serverHandshakeTrafficSecret, HKDFLabel{
-		Length:  uint16(keyLength),
-		Label:   "key",
-		Context: []byte{},
-	}.ToBytes())
-	serverWriteKey := make([]byte, keyLength)
-	if _, err := hkdfExpand.Read(serverWriteKey); err != nil {
+	serverWriteKey, err := HKDFExpandLabel(s.Hash, serverHandshakeTrafficSecret, "key", []byte{}, keyLength)
+	if err != nil {
 		return nil, nil, err
 	}
-	hkdfExpand = hkdf.Expand(s.Hash, serverHandshakeTrafficSecret, HKDFLabel{
-		Length:  uint16(ivLength),
-		Label:   "iv",
-		Context: []byte{},
-	}.ToBytes())
-	serverWriteIV := make([]byte, ivLength)
-	if _, err := hkdfExpand.Read(serverWriteIV); err != nil {
+	serverWriteIV, err := HKDFExpandLabel(s.Hash, serverHandshakeTrafficSecret, "iv", []byte{}, ivLength)
+	if err != nil {
 		return nil, nil, err
 	}
 	return serverWriteKey, serverWriteIV, nil
 }
 
-func (ce CertificateEntry) ToBytes() []byte {
+func (ce CertificateEntry) Bytes() []byte {
 	certEntry := []byte{}
 	// 証明書データの長さを3バイトで表現
 	length := len(ce.CertData)
@@ -430,19 +418,19 @@ func (ce CertificateEntry) ToBytes() []byte {
 	return certEntry
 }
 
-func (c CertificateMessage) ToBytes() []byte {
+func (c CertificateMessage) Bytes() []byte {
 	cert := []byte{}
 	// 証明書リクエストコンテキストの長さを1バイトで表現
 	cert = append(cert, byte(len(c.CertificateRequestContext)))
 	cert = append(cert, c.CertificateRequestContext...)
-	// 証明書リストの長さを3バイトで表現
 	length := 0
 	for _, entry := range c.CertificateList {
-		length += 3 + len(entry.CertData)
+		length += len(entry.Bytes())
 	}
+	// 証明書リストの長さを3バイトで表現
 	cert = append(cert, byte(length>>16), byte(length>>8), byte(length))
 	for _, entry := range c.CertificateList {
-		cert = append(cert, entry.ToBytes()...)
+		cert = append(cert, entry.Bytes()...)
 	}
 	return cert
 }
@@ -609,18 +597,26 @@ func handleConnection(conn net.Conn) {
 			}
 			serverHelloHandshake := HandshakeMessage[ServerHelloMessage]{
 				MsgType: ServerHello,
-				Length:  uint32(len(serverHello.ToBytes())),
+				Length:  uint32(len(serverHello.Bytes())),
 				Message: *serverHello,
 			}
 
 			handshakeResponse = TLSPlainText{
 				TLSContentType:      Handshake, // 0x16
 				LegacyRecordVersion: TLS12,     // 0x0303
-				Length:              uint16(len(serverHelloHandshake.ToBytes())),
-				Fragment:            serverHelloHandshake.ToBytes(),
+				Length:              uint16(len(serverHelloHandshake.Bytes())),
+				Fragment:            serverHelloHandshake.Bytes(),
 			}
-			fmt.Printf("ServerHello: %x\n\n", handshakeResponse.ToBytes())
-			conn.Write(handshakeResponse.ToBytes())
+			fmt.Printf("ServerHello: %x\n\n", handshakeResponse.Bytes())
+			conn.Write(handshakeResponse.Bytes())
+
+			// ChangeCipherSpec, is this necessary?
+			conn.Write(TLSPlainText{
+				TLSContentType:      ChangeCipherSpec, // 0x14
+				LegacyRecordVersion: TLS12,            // 0x0303
+				Length:              1,
+				Fragment:            []byte{1},
+			}.Bytes())
 
 			secrets, err := generateSecrets(ecdh.P256(), clientECDHPublicKey, ecdhServerPrivateKey)
 			if err != nil {
@@ -630,43 +626,95 @@ func handleConnection(conn net.Conn) {
 			serverWriteKey, serverWriteIV, err := secrets.HandshakeKeys(tlsRecord.Fragment, handshakeResponse.Fragment, 16, 12)
 			fmt.Printf("Server write key: %x\n", serverWriteKey)
 			fmt.Printf("Server IV: %x\n\n", serverWriteIV)
-			//
+
+			// EncryptedExtensions
+			extentions := EncryptedExtensionsMessage{
+				Extensions: []Extension{},
+			}
+			encryptedExtensionsMessage, err := encryptMessage(serverWriteKey, serverWriteIV, TLSInnerPlainText{
+				Content: HandshakeMessage[EncryptedExtensionsMessage]{
+					MsgType: EncryptedExtensions,
+					Length:  uint32(len(extentions.Bytes())),
+					Message: extentions,
+				}.Bytes(),
+				ContentType: Handshake,
+			}.Bytes(), 0)
+			if err != nil {
+				fmt.Println("Error encrypting message:", err)
+				return
+			}
+			fmt.Println("Length of EncryptedExtensions:", len(extentions.Bytes()))
+			fmt.Printf("Encrypted EncryptedExtensions Message: %x\n", encryptedExtensionsMessage)
+			fmt.Printf("Encrypted EncryptedExtensions Message length: %d\n\n", len(encryptedExtensionsMessage))
+			encryptedExtensionsTLSRecord := NewTLSCipherMessageText(encryptedExtensionsMessage)
+			fmt.Printf("Certificate TLS Record: %x\n\n", encryptedExtensionsTLSRecord)
+			conn.Write(encryptedExtensionsTLSRecord.Bytes())
+
 			certificateMessage, err := constructCertificate()
 			if err != nil {
 				fmt.Println("Error constructing certificate:", err)
 				return
 			}
-			fmt.Printf("Certificate: %x\n", certificateMessage.ToBytes())
-			fmt.Printf("Certificate Length: %d\n\n", len(certificateMessage.ToBytes()))
+			fmt.Printf("Certificate: %x\n", certificateMessage.Bytes())
+			fmt.Printf("Certificate Length: %d\n\n", len(certificateMessage.Bytes()))
 			// TODO: Encrypt the certificate to construct Certificate message
 			// AES_128_GCMで暗号化
-			encryptedHandshakeCertificateMessage, err := encryptCertificateMessage(serverWriteKey, serverWriteIV, TLSInnerPlainText{
+			encryptedHandshakeCertificateMessage, err := encryptMessage(serverWriteKey, serverWriteIV, TLSInnerPlainText{
 				Content: HandshakeMessage[CertificateMessage]{
 					MsgType: Certificate,
-					Length:  uint32(len(certificateMessage.ToBytes())),
+					Length:  uint32(len(certificateMessage.Bytes())),
 					Message: *certificateMessage,
-				}.ToBytes(),
-			}.ToBytes())
+				}.Bytes(),
+				ContentType: Handshake,
+			}.Bytes(), 1)
 			if err != nil {
 				fmt.Println("Error encrypting message:", err)
 				return
 			}
 
-			fmt.Printf("Encrypted Message: %x\n", encryptedHandshakeCertificateMessage)
-			fmt.Printf("Encrypted Message length: %d\n\n", len(encryptedHandshakeCertificateMessage))
+			fmt.Printf("Encrypted Certificate Message: %x\n", encryptedHandshakeCertificateMessage)
+			fmt.Printf("Encrypted Certificate Message length: %d\n\n", len(encryptedHandshakeCertificateMessage))
 
 			certificateTLSRecord := NewTLSCipherMessageText(encryptedHandshakeCertificateMessage)
-			fmt.Printf("Certificate TLS Record: %x\n\n", certificateTLSRecord.ToBytes())
-			conn.Write(certificateTLSRecord.ToBytes())
+			fmt.Printf("Certificate TLS Record: %x\n\n", certificateTLSRecord.Bytes())
+			conn.Write(certificateTLSRecord.Bytes())
 		}
 
-		// fmt.Printf("ServerHello: %x\n", handshakeResponse.ToBytes())
-		// conn.Write(handshakeResponse.ToBytes())
+		// fmt.Printf("ServerHello: %x\n", handshakeResponse.Bytes())
+		// conn.Write(handshakeResponse.Bytes())
 	}
 
 	// クライアントに対して簡単な応答を送信
 	// response := "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
 	// conn.Write([]byte(response))
+}
+
+func TranscriptHash(hash func() hash.Hash, messages [][]byte) []byte {
+	h := hash()
+	for _, message := range messages {
+		h.Write(message)
+	}
+	return h.Sum(nil)
+}
+
+func HKDFExpandLabel(hash func() hash.Hash, secret []byte, label string, content []byte, length int) ([]byte, error) {
+	hkdflabel := HKDFLabel{
+		Length:  uint16(length),
+		Label:   "tls13 " + label,
+		Context: content,
+	}
+
+	hkdfExpand := hkdf.Expand(hash, secret, hkdflabel.Bytes())
+	derivedSecret := make([]byte, length)
+	_, err := hkdfExpand.Read(derivedSecret)
+	if err != nil {
+		return nil, err
+	}
+	return derivedSecret, nil
+}
+
+func DeriveSecret(hash func() hash.Hash, secret []byte, label string, messages [][]byte) ([]byte, error) {
+	return HKDFExpandLabel(hash, secret, label, TranscriptHash(hash, messages), hash().Size())
 }
 
 func generateSecrets(curve ecdh.Curve, clientPublicKeyBytes []byte, serverPrivateKey *ecdh.PrivateKey) (*Secrets, error) {
@@ -683,40 +731,22 @@ func generateSecrets(curve ecdh.Curve, clientPublicKeyBytes []byte, serverPrivat
 
 	// Early Secret
 	hash := sha256.New
-	earlySecret := hkdf.Extract(hash, []byte{}, make([]byte, hash().Size()))
+	zero32 := make([]byte, hash().Size())
+	earlySecret := hkdf.Extract(hash, zero32, zero32)
 	fmt.Printf("Early Secret: %x\n", earlySecret)
 
-	hkdfExpand := hkdf.Expand(sha256.New, earlySecret, HKDFLabel{
-		Length:  32,
-		Label:   "derived",
-		Context: []byte{},
-	}.ToBytes())
-	secretState := make([]byte, 32)
-	_, err = io.ReadFull(hkdfExpand, secretState)
+	secretState, err := DeriveSecret(hash, earlySecret, "derived", [][]byte{})
 	if err != nil {
 		return nil, err
 	}
-	// fmt.Printf("Secret state: %x\n", secretState)
-
-	// Handshake Secret
-	handshakeSecret := hkdf.Extract(sha256.New, sharedSecret, secretState)
+	handshakeSecret := hkdf.Extract(hash, sharedSecret, secretState)
 	fmt.Printf("Handshake Secret: %x\n", handshakeSecret)
 
-	hkdfExpand = hkdf.Expand(sha256.New, handshakeSecret, HKDFLabel{
-		Length:  32,
-		Label:   "derived",
-		Context: []byte{},
-	}.ToBytes())
-	secretState = make([]byte, 32)
-	_, err = io.ReadFull(hkdfExpand, secretState)
+	secretState, err = DeriveSecret(hash, handshakeSecret, "derived", [][]byte{})
 	if err != nil {
 		return nil, err
 	}
-	// fmt.Printf("Secret state: %x\n", secretState)
-
-	// Derive Master Secret
-	masterSecret := hkdf.Extract(sha256.New, []byte{}, secretState)
-	fmt.Printf("Master Secret: %x\n", masterSecret)
+	masterSecret := hkdf.Extract(hash, zero32, secretState)
 	return &Secrets{
 		Hash:            hash,
 		EarlySecret:     earlySecret,
@@ -725,7 +755,7 @@ func generateSecrets(curve ecdh.Curve, clientPublicKeyBytes []byte, serverPrivat
 	}, nil
 }
 
-func encryptCertificateMessage(key, iv, plaintext []byte) ([]byte, error) {
+func encryptMessage(key, iv, plaintext []byte, sequenceNumber uint64) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -734,8 +764,24 @@ func encryptCertificateMessage(key, iv, plaintext []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	nonce := iv // GCMモードではnonceとしてIVを使用
-	encrypted := aesgcm.Seal(nil, nonce, plaintext, nil)
+	sequenceNumberBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(sequenceNumberBytes, sequenceNumber)
+
+	paddedSequenceNumber := make([]byte, len(iv))
+	copy(paddedSequenceNumber[len(iv)-8:], sequenceNumberBytes)
+	fmt.Println("paddedSequenceNumber is ", paddedSequenceNumber)
+	nonce := make([]byte, len(iv))
+	for i := range iv {
+		nonce[i] = paddedSequenceNumber[i] ^ iv[i]
+	}
+	fmt.Println("nonce is ", nonce)
+	fmt.Println("plaintext length is ", len(plaintext))
+	TLSCipherTextLength := len(plaintext) + aesgcm.Overhead()
+	additional_data := []byte{
+		0x17, 0x03, 0x03, byte(TLSCipherTextLength >> 8), byte(TLSCipherTextLength),
+	}
+	fmt.Printf("additional_data is %x\n", additional_data)
+	encrypted := aesgcm.Seal(nil, nonce, plaintext, additional_data)
 	return encrypted, nil
 }
 
@@ -797,7 +843,7 @@ func constructServerHello(curve ecdh.Curve, namedGroup uint16, cipherSuite uint1
 			{
 				Type:   KeyShareExtensionType,
 				Length: keyShareExtension.Length,
-				Data:   keyShareExtension.ToBytes(),
+				Data:   keyShareExtension.Bytes(),
 			},
 		},
 	}, nil
