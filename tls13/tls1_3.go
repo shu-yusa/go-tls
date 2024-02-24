@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"hash"
 	"log"
@@ -17,53 +16,64 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
-// ServerHelloMessage はServerHelloメッセージの構造を模倣します。
 type (
-	Serializable interface {
+	HandshakeEncoder interface {
 		Bytes() []byte
 	}
 
-	ContentType     uint8
+	ContentType     uint8 // Record protocol
 	ProtocolVersion uint16
 	HandshakeType   uint8
 	ExtensionType   uint16
 	CertificateType uint8
 
+	CipherSuite        uint16
+	NamedGroup         uint16
+	SignatureScheme    uint16
+	PSKKeyExchangeMode uint8
+
+	// TLS Record before encryption
 	TLSPlainText struct {
-		TLSContentType      ContentType
+		ContentType         ContentType
 		LegacyRecordVersion ProtocolVersion
 		Length              uint16
 		Fragment            []byte
 	}
+
+	// TLS Record used as a payload for encryption
 	TLSInnerPlainText struct {
 		Content     []byte
-		ContentType ContentType
-		Zeros       []byte
+		ContentType ContentType // real content type
+		Zeros       []byte      // padding
 	}
 
 	TLSCipherMessageText struct {
 		ContentType     ContentType
 		LegacyVersion   ProtocolVersion
 		Length          uint16
-		EncryptedRecord []byte
+		EncryptedRecord []byte // Encrypted TLSInnerPlainText
 	}
-	HandshakeMessage[T Serializable] struct {
-		MsgType HandshakeType
-		Length  uint32
-		Message T
+
+	Handshake[T HandshakeEncoder] struct {
+		MsgType          HandshakeType
+		Length           uint32
+		HandshakeMessage T
 	}
+
+	// HandshakeEncoder
 	ClientHelloMessage struct {
-		LegacyVersion           string
-		Random                  string
-		CipherSuite             string
-		LegacyCompressionMethod string
-		Extensions              []string
+		LegacyVersion           ProtocolVersion
+		Random                  []byte
+		LegacySessionID         []byte
+		CipherSuites            []CipherSuite
+		LegacyCompressionMethod []byte
+		Extensions              []Extension
 	}
 	ServerHelloMessage struct {
 		LegacyVersion     ProtocolVersion
 		RandomBytes       [32]byte
 		SessionID         []byte
-		CipherSuite       uint16
+		CipherSuite       CipherSuite
 		CompressionMethod uint8
 		Extensions        []Extension
 	}
@@ -77,8 +87,8 @@ type (
 		Data   []byte
 	}
 
-	SupportedVersionsExtension struct {
-		SelectedVersion ProtocolVersion
+	ClientSupportedVersionsExtension struct {
+		SelectedVersions []ProtocolVersion
 	}
 
 	SupportedPointFormatsExtension struct {
@@ -86,14 +96,19 @@ type (
 		ECPointFormats []uint8
 	}
 
+	PSKKeyExchangeModesExtension struct {
+		Length  uint8
+		KEModes []PSKKeyExchangeMode
+	}
+
 	SupportedGroupExtension struct {
 		Length         uint16
-		NamedGroupList []uint16
+		NamedGroupList []NamedGroup
 	}
 
 	SignatureAlgorithmsExtension struct {
 		Length                       uint16
-		SupportedSignatureAlgorithms []uint16
+		SupportedSignatureAlgorithms []SignatureScheme
 	}
 
 	KeyShareEntry struct {
@@ -136,11 +151,11 @@ type (
 )
 
 const (
-	Invalid          ContentType = 0x00
-	ChangeCipherSpec ContentType = 0x14
-	Alert            ContentType = 0x15
-	Handshake        ContentType = 0x16
-	ApplicationData  ContentType = 0x17
+	InvalidRecord          ContentType = 0x00
+	ChangeCipherSpecRecord ContentType = 0x14
+	AlertRecord            ContentType = 0x15
+	HandshakeRecord        ContentType = 0x16
+	ApplicationDataRecord  ContentType = 0x17
 
 	TLS10 ProtocolVersion = 0x0301
 	TLS11 ProtocolVersion = 0x0302
@@ -174,32 +189,92 @@ const (
 	KeyShareExtensionType                   = 51
 	EncryptedClientHelloExtensionType       = 65037
 	RenegotiationInfoExtensionType          = 65281
+
+	// CipherSuites
+	TLS_AES_128_GCM_SHA256                        CipherSuite = 0x1301
+	TLS_AES_256_GCM_SHA384                        CipherSuite = 0x1302
+	TLS_CHACHA20_POLY1305_SHA256                  CipherSuite = 0x1303
+	TLS_AES_128_CCM_SHA256                        CipherSuite = 0x1304
+	TLS_AES_128_CCM_8_SHA256                      CipherSuite = 0x1305
+	TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256       CipherSuite = 0xc02b
+	TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384       CipherSuite = 0xc02c
+	TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256         CipherSuite = 0xc02f
+	TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384         CipherSuite = 0xc030
+	TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA            CipherSuite = 0xc013
+	TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA            CipherSuite = 0xc014
+	TLS_RSA_WITH_AES_128_GCM_SHA256               CipherSuite = 0x009c
+	TLS_RSA_WITH_AES_256_GCM_SHA384               CipherSuite = 0x009d
+	TLS_RSA_WITH_AES_128_CBC_SHA                  CipherSuite = 0x002f
+	TLS_RSA_WITH_AES_256_CBC_SHA                  CipherSuite = 0x0035
+	TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256   CipherSuite = 0xcca8
+	TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256 CipherSuite = 0xcca9
+
+	// NamedGroups for Elliptic Curve
+	secp256r1 NamedGroup = 0x0017
+	secp384r1 NamedGroup = 0x0018
+	secp521r1 NamedGroup = 0x0019
+	x25519    NamedGroup = 0x001d
+	x448      NamedGroup = 0x001e
+	ffdhe2048 NamedGroup = 0x0100
+	ffdhe3072 NamedGroup = 0x0101
+	ffdhe4096 NamedGroup = 0x0102
+	ffdhe6144 NamedGroup = 0x0103
+	ffdhe8192 NamedGroup = 0x0104
+
+	// SignatureSchemes
+	ecdsa_secp256r1_sha256            SignatureScheme = 0x0403
+	ecdsa_secp384r1_sha384            SignatureScheme = 0x0503
+	ecdsa_secp521r1_sha512            SignatureScheme = 0x0603
+	ed25519                           SignatureScheme = 0x0807
+	ed448                             SignatureScheme = 0x0808
+	rsa_pss_pss_sha256                SignatureScheme = 0x0809
+	rsa_pss_pss_sha384                SignatureScheme = 0x080a
+	rsa_pss_pss_sha512                SignatureScheme = 0x080b
+	ecdsa_brainpoolP256r1tls13_sha256 SignatureScheme = 0x081a
+	ecdsa_brainpoolP384r1tls13_sha384 SignatureScheme = 0x081b
+	ecdsa_brainpoolP512r1tls13_sha512 SignatureScheme = 0x081c
+	rsa_pss_rsae_sha256               SignatureScheme = 0x0804
+	rsa_pss_rsae_sha384               SignatureScheme = 0x0805
+	rsa_pss_rsae_sha512               SignatureScheme = 0x0806
+	rsa_pkcs1_sha256                  SignatureScheme = 0x0401
+	rsa_pkcs1_sha384                  SignatureScheme = 0x0501
+	rsa_pkcs1_sha512                  SignatureScheme = 0x0601
+
+	// PSKKeyExchangeMode
+	psk_ke     PSKKeyExchangeMode = 0
+	psk_dhe_ke PSKKeyExchangeMode = 1
 )
 
 // https://tex2e.github.io/rfc-translater/html/rfc8422.html#6--Cipher-Suites
 // https://tex2e.github.io/rfc-translater/html/rfc7905.html
 // https://datatracker.ietf.org/doc/html/rfc5288
 // https://tex2e.github.io/rfc-translater/html/rfc5246.html#A-5--The-Cipher-Suite
-var CipherSuiteName = map[uint16]string{
-	0x1301: "TLS_AES_128_GCM_SHA256",
-	0x1302: "TLS_AES_256_GCM_SHA384",
-	0x1303: "TLS_CHACHA20_POLY1305_SHA256",
-	0x1304: "TLS_AES_128_CCM_SHA256",
-	0x1305: "TLS_AES_128_CCM_8_SHA256",
-	0xc02b: "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
-	0xc02c: "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
-	0xc02f: "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-	0xc030: "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
-	0xc013: "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
-	0xc014: "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
-	0x009c: "TLS_RSA_WITH_AES_128_GCM_SHA256",
-	0x009d: "TLS_RSA_WITH_AES_256_GCM_SHA384",
 
-	0x002f: "TLS_RSA_WITH_AES_128_CBC_SHA",
-	0x0035: "TLS_RSA_WITH_AES_256_CBC_SHA",
+var ProtocolVersionName = map[ProtocolVersion]string{
+	TLS10: "TLS 1.0",
+	TLS11: "TLS 1.1",
+	TLS12: "TLS 1.2",
+	TLS13: "TLS 1.3",
+}
 
-	0xcca8: "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
-	0xcca9: "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+var CipherSuiteName = map[CipherSuite]string{
+	TLS_AES_128_GCM_SHA256:                        "TLS_AES_128_GCM_SHA256",
+	TLS_AES_256_GCM_SHA384:                        "TLS_AES_256_GCM_SHA384",
+	TLS_CHACHA20_POLY1305_SHA256:                  "TLS_CHACHA20_POLY1305_SHA256",
+	TLS_AES_128_CCM_SHA256:                        "TLS_AES_128_CCM_SHA256",
+	TLS_AES_128_CCM_8_SHA256:                      "TLS_AES_128_CCM_8_SHA256",
+	TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:       "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+	TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:       "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+	TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:         "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+	TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:         "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+	TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:            "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+	TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:            "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+	TLS_RSA_WITH_AES_128_GCM_SHA256:               "TLS_RSA_WITH_AES_128_GCM_SHA256",
+	TLS_RSA_WITH_AES_256_GCM_SHA384:               "TLS_RSA_WITH_AES_256_GCM_SHA384",
+	TLS_RSA_WITH_AES_128_CBC_SHA:                  "TLS_RSA_WITH_AES_128_CBC_SHA",
+	TLS_RSA_WITH_AES_256_CBC_SHA:                  "TLS_RSA_WITH_AES_256_CBC_SHA",
+	TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:   "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+	TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256: "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
 }
 
 var ExtensionName = map[ExtensionType]string{
@@ -227,42 +302,196 @@ var ECPointFormatName = map[uint8]string{
 	2: "ansiX962_compressed_char2",
 }
 
-var NamedGroupName = map[uint16]string{
-	0x0017: "secp256r1",
-	0x0018: "secp384r1",
-	0x0019: "secp521r1",
-	0x001d: "x25519",
-	0x001e: "x448",
-	0x0100: "ffdhe2048",
-	0x0101: "ffdhe3072",
-	0x0102: "ffdhe4096",
-	0x0103: "ffdhe6144",
-	0x0104: "ffdhe8192",
+var PSKKeyExchangeModeName = map[PSKKeyExchangeMode]string{
+	psk_ke:     "psk_ke",
+	psk_dhe_ke: "psk_dhe_ke",
 }
 
-var SignatureAlgorithmName = map[uint16]string{
-	0x0403: "ecdsa_secp256r1_sha256",
-	0x0503: "ecdsa_secp384r1_sha384",
-	0x0603: "ecdsa_secp521r1_sha512",
-	0x0807: "ed25519",
-	0x0808: "ed448",
-	0x0809: "rsa_pss_pss_sha256",
-	0x080a: "rsa_pss_pss_sha384",
-	0x080b: "rsa_pss_pss_sha512",
-	0x081a: "ecdsa_brainpoolP256r1tls13_sha256",
-	0x081b: "ecdsa_brainpoolP384r1tls13_sha384",
-	0x081c: "ecdsa_brainpoolP512r1tls13_sha512",
-	0x0804: "rsa_pss_rsae_sha256",
-	0x0805: "rsa_pss_rsae_sha384",
-	0x0806: "rsa_pss_rsae_sha512",
-	0x0401: "rsa_pkcs1_sha256",
-	0x0501: "rsa_pkcs1_sha384",
-	0x0601: "rsa_pkcs1_sha512",
+var NamedGroupName = map[NamedGroup]string{
+	secp256r1: "secp256r1",
+	secp384r1: "secp384r1",
+	secp521r1: "secp521r1",
+	x25519:    "x25519",
+	x448:      "x448",
+	ffdhe2048: "ffdhe2048",
+	ffdhe3072: "ffdhe3072",
+	ffdhe4096: "ffdhe4096",
+	ffdhe6144: "ffdhe6144",
+	ffdhe8192: "ffdhe8192",
+}
+
+var SignatureAlgorithmName = map[SignatureScheme]string{
+	ecdsa_secp256r1_sha256:            "ecdsa_secp256r1_sha256",
+	ecdsa_secp384r1_sha384:            "ecdsa_secp384r1_sha384",
+	ecdsa_secp521r1_sha512:            "ecdsa_secp521r1_sha512",
+	ed25519:                           "ed25519",
+	ed448:                             "ed448",
+	rsa_pss_pss_sha256:                "rsa_pss_pss_sha256",
+	rsa_pss_pss_sha384:                "rsa_pss_pss_sha384",
+	rsa_pss_pss_sha512:                "rsa_pss_pss_sha512",
+	ecdsa_brainpoolP256r1tls13_sha256: "ecdsa_brainpoolP256r1tls13_sha256",
+	ecdsa_brainpoolP384r1tls13_sha384: "ecdsa_brainpoolP384r1tls13_sha384",
+	ecdsa_brainpoolP512r1tls13_sha512: "ecdsa_brainpoolP512r1tls13_sha512",
+	rsa_pss_rsae_sha256:               "rsa_pss_rsae_sha256",
+	rsa_pss_rsae_sha384:               "rsa_pss_rsae_sha384",
+	rsa_pss_rsae_sha512:               "rsa_pss_rsae_sha512",
+	rsa_pkcs1_sha256:                  "rsa_pkcs1_sha256",
+	rsa_pkcs1_sha384:                  "rsa_pkcs1_sha384",
+	rsa_pkcs1_sha512:                  "rsa_pkcs1_sha512",
+}
+
+func fromClientHello(clientHelloBuffer []byte) ClientHelloMessage {
+	legacyVersion := ProtocolVersion(binary.BigEndian.Uint16(clientHelloBuffer[0:2])) // 2 bytes
+	random := clientHelloBuffer[2:34]                                                 // 32 bytes
+	legacySessionIDLength := uint8(clientHelloBuffer[34])                             // 1 byte
+	legacySessionID := clientHelloBuffer[35 : 35+legacySessionIDLength]
+	cipherSuiteLength := binary.BigEndian.Uint16(clientHelloBuffer[35+legacySessionIDLength : 35+legacySessionIDLength+2]) // 2 bytes
+	cipherSuites := []CipherSuite{}
+	for i := 0; i < int(cipherSuiteLength); i += 2 {
+		cipherSuite := binary.BigEndian.Uint16(clientHelloBuffer[35+int(legacySessionIDLength)+2+i : 35+int(legacySessionIDLength)+2+i+2])
+		cipherSuites = append(cipherSuites, CipherSuite(cipherSuite))
+	}
+	legacyCompressionMethodLength := uint8(clientHelloBuffer[35+int(legacySessionIDLength)+2+int(cipherSuiteLength)])
+	legacyCompressionOffset := 35 + int(legacySessionIDLength) + 2 + int(cipherSuiteLength) + 1
+	legacyCompressionMethod := clientHelloBuffer[legacyCompressionOffset : legacyCompressionOffset+int(legacyCompressionMethodLength)]
+
+	// Extensions
+	extensionOffset := 35 + int(legacySessionIDLength) + 2 + int(cipherSuiteLength) + 1 + int(legacyCompressionMethodLength)
+	extensionLength := binary.BigEndian.Uint16(clientHelloBuffer[extensionOffset : extensionOffset+2])
+	extensionBuffer := clientHelloBuffer[extensionOffset+2 : extensionOffset+2+int(extensionLength)]
+	var extensions []Extension
+	cursor := 0
+	for cursor < int(extensionLength) {
+		length := binary.BigEndian.Uint16(extensionBuffer[cursor+2 : cursor+4])
+		extensions = append(extensions, Extension{
+			Type:   ExtensionType(binary.BigEndian.Uint16(extensionBuffer[cursor : cursor+2])),
+			Length: length,
+			Data:   extensionBuffer[cursor+4 : cursor+4+int(length)],
+		})
+		cursor += 4 + int(length)
+	}
+	return ClientHelloMessage{
+		LegacyVersion:           legacyVersion,
+		Random:                  random,
+		LegacySessionID:         legacySessionID,
+		CipherSuites:            cipherSuites,
+		LegacyCompressionMethod: legacyCompressionMethod,
+		Extensions:              extensions,
+	}
+}
+
+func (ch ClientHelloMessage) parseExtensions() map[ExtensionType]interface{} {
+	var extensionMap = make(map[ExtensionType]interface{})
+	for _, extension := range ch.Extensions {
+		switch extension.Type {
+		case SupportedPointFormatsExtensionType:
+			fmt.Println("  - SupportedPointFormatsExtension")
+			length := uint8(extension.Data[0])
+			var ECPointFormats []uint8
+			for i := 0; i < int(length); i++ {
+				ECPointFormat := uint8(extension.Data[1+i])
+				ECPointFormats = append(ECPointFormats, ECPointFormat)
+				fmt.Printf("      ECPointFormat: %s (%x)\n", ECPointFormatName[ECPointFormat], ECPointFormat)
+			}
+			extensionMap[SupportedPointFormatsExtensionType] = SupportedPointFormatsExtension{
+				Length:         length,
+				ECPointFormats: ECPointFormats,
+			}
+		case SupportedGroupsExtensionType:
+			fmt.Println("  - SupportedGroupsExtension")
+			length := binary.BigEndian.Uint16(extension.Data[0:2])
+			var NamedGroupList []NamedGroup
+			for i := 0; i < int(length); i += 2 {
+				namedGroup := binary.BigEndian.Uint16(extension.Data[2+i : 2+i+2])
+				NamedGroupList = append(NamedGroupList, NamedGroup(namedGroup))
+				fmt.Printf("      Named Group: %s (%x)\n", NamedGroupName[NamedGroup(namedGroup)], namedGroup)
+			}
+			extensionMap[SupportedGroupsExtensionType] = SupportedGroupExtension{
+				Length:         length,
+				NamedGroupList: NamedGroupList,
+			}
+		case SignatureAlgorithmsExtensionType:
+			fmt.Println("  - SignatureAlgorithmsExtension")
+			length := binary.BigEndian.Uint16(extension.Data[0:2])
+			// fmt.Println("  SignatureAlgorithmsExtension length:", length)
+			var signatureAlgorithms []SignatureScheme
+			for i := 0; i < int(length); i += 2 {
+				signatureScheme := binary.BigEndian.Uint16(extension.Data[2+i : 2+i+2])
+				signatureAlgorithms = append(signatureAlgorithms, SignatureScheme(signatureScheme))
+				fmt.Printf("      Signature algorithm: %s (%x)\n", SignatureAlgorithmName[SignatureScheme(signatureScheme)], signatureScheme)
+			}
+			extensionMap[SignatureAlgorithmsExtensionType] = SignatureAlgorithmsExtension{
+				Length:                       length,
+				SupportedSignatureAlgorithms: signatureAlgorithms,
+			}
+		case KeyShareExtensionType:
+			fmt.Println("  - KeyShareExtension")
+			length := binary.BigEndian.Uint16(extension.Data[0:2])
+			// fmt.Println("  KeyShareExtension length:", length)
+			var clientShares []KeyShareEntry
+			keyShareCursor := 2
+			for keyShareCursor < int(length) {
+				group := binary.BigEndian.Uint16(extension.Data[keyShareCursor : keyShareCursor+2])
+				keyExchangeDataLength := binary.BigEndian.Uint16(extension.Data[keyShareCursor+2 : keyShareCursor+4])
+				clientShare := KeyShareEntry{
+					Group:           group,
+					Length:          keyExchangeDataLength,
+					KeyExchangeData: extension.Data[keyShareCursor+4 : keyShareCursor+4+int(keyExchangeDataLength)],
+				}
+				clientShares = append(clientShares, clientShare)
+				fmt.Printf("      Group: %s (%x)\n", NamedGroupName[NamedGroup(group)], group)
+				fmt.Printf("      Length: %d\n", keyExchangeDataLength)
+				fmt.Printf("      KeyExchangeData: %x\n", clientShare.KeyExchangeData)
+				keyShareCursor += 4 + int(keyExchangeDataLength)
+			}
+			extensionMap[KeyShareExtensionType] = KeyShareExtension{
+				Length:       length,
+				ClientShares: clientShares,
+			}
+		case ExtendedMasterSecretExtensionType:
+			fmt.Println("  - ExtendedMasterSecretExtension")
+		case SupportedVersionsExtensionType:
+			// https://tex2e.github.io/rfc-translater/html/rfc8446.html#4-2-1--Supported-Versions
+			fmt.Println("  - SupportedVersionsExtension")
+			length := uint8(extension.Data[0])
+			versions := []ProtocolVersion{}
+			for i := 0; i < int(length); i += 2 {
+				version := binary.BigEndian.Uint16(extension.Data[1+i : 1+i+2])
+				versions = append(versions, ProtocolVersion(version))
+				fmt.Printf("      Version: %s (%x)\n", ProtocolVersionName[ProtocolVersion(version)], version)
+			}
+			extensionMap[SupportedVersionsExtensionType] = ClientSupportedVersionsExtension{
+				SelectedVersions: versions,
+			}
+		case PSKKeyExchangeModesExtensionType:
+			fmt.Println("  - PSKKeyExchangeModesExtension")
+			length := uint8(extension.Data[0])
+			keModes := []PSKKeyExchangeMode{}
+			for i := 0; i < int(length); i++ {
+				keMode := PSKKeyExchangeMode(extension.Data[1+i])
+				keModes = append(keModes, PSKKeyExchangeMode(keMode))
+				fmt.Printf("      PSKKeyExchangeMode: %s (%x)\n", PSKKeyExchangeModeName[PSKKeyExchangeMode(keMode)], keMode)
+			}
+			extensionMap[PSKKeyExchangeModesExtensionType] = PSKKeyExchangeModesExtension{
+				Length:  length,
+				KEModes: keModes,
+			}
+		case EncryptThenMacExtensionType:
+			// https://tex2e.github.io/rfc-translater/html/rfc7366.html
+			fmt.Println("  - EncryptThenMacExtension")
+		case SessionTicketExtensionType:
+			fmt.Println("  - SessionTicketExtension")
+		default:
+			fmt.Printf("  - Extension data: %x\n", extension)
+			extensionMap[extension.Type] = extension.Data
+		}
+	}
+	return extensionMap
 }
 
 func NewTLSCipherMessageText(encryptedRecord []byte) *TLSCipherMessageText {
 	return &TLSCipherMessageText{
-		ContentType:     ApplicationData,
+		ContentType:     ApplicationDataRecord,
 		LegacyVersion:   TLS12,
 		Length:          uint16(len(encryptedRecord)),
 		EncryptedRecord: encryptedRecord,
@@ -285,7 +514,7 @@ func (t TLSCipherMessageText) Bytes() []byte {
 
 func (t TLSPlainText) Bytes() []byte {
 	return append([]byte{
-		byte(uint8(t.TLSContentType)),
+		byte(uint8(t.ContentType)),
 		byte(uint8(t.LegacyRecordVersion >> 8)),
 		byte(uint8(t.LegacyRecordVersion)),
 		byte(uint8(t.Length >> 8)),
@@ -322,13 +551,13 @@ func (sh ServerHelloMessage) Bytes() []byte {
 	return serverHello
 }
 
-func (hs HandshakeMessage[T]) Bytes() []byte {
+func (hs Handshake[T]) Bytes() []byte {
 	handshake := []byte{}
 	handshake = append(handshake, byte(uint8(hs.MsgType)))
 	handshake = append(handshake, byte(uint8(hs.Length>>16)))
 	handshake = append(handshake, byte(uint8(hs.Length>>8)))
 	handshake = append(handshake, byte(uint8(hs.Length)))
-	handshake = append(handshake, hs.Message.Bytes()...)
+	handshake = append(handshake, hs.HandshakeMessage.Bytes()...)
 	return handshake
 }
 
@@ -372,13 +601,11 @@ func (l HKDFLabel) Bytes() []byte {
 	label := []byte{}
 	label = append(label, byte(uint8(l.Length>>8)))
 	label = append(label, byte(uint8(l.Length)))
-	// "tls13 "プレフィックスとLabelを連結し、バイトに変換
+
 	labelBytes := []byte(l.Label)
-	// Labelの長さを先頭に追加
 	label = append(label, byte(len(labelBytes)))
 	label = append(label, labelBytes...)
 
-	// Contextの長さを先頭に追加
 	label = append(label, byte(len(l.Context)))
 	label = append(label, l.Context...)
 	return label
@@ -471,15 +698,14 @@ func handleConnection(conn net.Conn) {
 
 	length := binary.BigEndian.Uint16(header[3:5])
 	tlsRecord := &TLSPlainText{
-		TLSContentType:      ContentType(header[0]),
+		ContentType:         ContentType(header[0]),
 		LegacyRecordVersion: ProtocolVersion(binary.BigEndian.Uint16(header[1:3])),
 		Length:              length,
 		Fragment:            header[5 : 5+length],
 	}
 
 	var handshakeResponse TLSPlainText
-	if tlsRecord.TLSContentType == Handshake { // 22 stands for Handshake record type
-		var clientECDHPublicKey []byte
+	if tlsRecord.ContentType == HandshakeRecord { // 22 stands for Handshake record type
 		fmt.Println("Received TLS Handshake message")
 		fmt.Printf("Legacy version: %x\n", tlsRecord.LegacyRecordVersion)
 		fmt.Printf("Record length: %d bytes\n", tlsRecord.Length)
@@ -490,120 +716,40 @@ func handleConnection(conn net.Conn) {
 		fmt.Println(fmt.Sprintf("Handshake msg_type: %d\n", msgType))
 		if msgType == ClientHello { // 1 for ClientHello
 			fmt.Println("Received ClientHello message")
-			handshake := &HandshakeMessage[ClientHelloMessage]{
-				MsgType: msgType,
-				Length:  handshakeLength,
-				Message: ClientHelloMessage{},
-			}
 			fmt.Println("Handshake: ClientHello")
-			fmt.Printf("Handshake message length: %d bytes\n", handshake.Length)
-			clientHelloBuffer := tlsRecord.Fragment[4 : 4+handshake.Length]
-			legacyVersion := ProtocolVersion(binary.BigEndian.Uint16(clientHelloBuffer[0:2])) // 2 bytes
-			fmt.Printf("Legacy version: %x\n", legacyVersion)
-			random := hex.EncodeToString(clientHelloBuffer[2:34]) // 32 bytes
-			fmt.Printf("Random: %s\n", random)
-			legacySessionIDLength := uint8(clientHelloBuffer[34]) // 1 byte
-			fmt.Printf("LegacySessionIDLength: %d\n", legacySessionIDLength)
-			legacySessionID := clientHelloBuffer[35 : 35+legacySessionIDLength]
-			fmt.Printf("LegacySessionID: %x\n", legacySessionID)
-			cipherSuiteLength := binary.BigEndian.Uint16(clientHelloBuffer[35+legacySessionIDLength : 35+legacySessionIDLength+2]) // 2 bytes
-			fmt.Printf("CipherSuiteLength: %d\n", cipherSuiteLength)
-			for i := 0; i < int(cipherSuiteLength); i += 2 {
-				cipherSuite := binary.BigEndian.Uint16(clientHelloBuffer[35+int(legacySessionIDLength)+2+i : 35+int(legacySessionIDLength)+2+i+2])
+			fmt.Printf("Handshake message length: %d bytes\n", handshakeLength)
+			fmt.Println()
+			clientHello := fromClientHello(tlsRecord.Fragment[4 : 4+handshakeLength])
+			fmt.Printf("Legacy version: %x\n", clientHello.LegacyVersion)
+			fmt.Printf("Random: %x\n", clientHello.Random)
+			fmt.Printf("LegacySessionIDLength: %d\n", len(clientHello.LegacySessionID))
+			fmt.Printf("LegacySessionID: %x\n", clientHello.LegacySessionID)
+			fmt.Println("CipherSuites")
+			for _, cipherSuite := range clientHello.CipherSuites {
 				fmt.Printf("  CipherSuite: %s (%x)\n", CipherSuiteName[cipherSuite], cipherSuite)
 			}
-			legacyCompressionMethodLength := uint8(clientHelloBuffer[35+int(legacySessionIDLength)+2+int(cipherSuiteLength)])
-			fmt.Printf("LegacyCompressionMethodLength: %d\n", legacyCompressionMethodLength)
-			legacyCompressionOffset := 35 + int(legacySessionIDLength) + 2 + int(cipherSuiteLength) + 1
-			legacyCompressionMethod := clientHelloBuffer[legacyCompressionOffset : legacyCompressionOffset+int(legacyCompressionMethodLength)]
-			fmt.Printf("LegacyCompressionMethod: %d\n", legacyCompressionMethod)
-			extensionOffset := 35 + int(legacySessionIDLength) + 2 + int(cipherSuiteLength) + 1 + int(legacyCompressionMethodLength)
-			extensionLength := binary.BigEndian.Uint16(clientHelloBuffer[extensionOffset : extensionOffset+2])
-			fmt.Println()
-			fmt.Printf("ExtensionLength: %d\n", extensionLength)
+			fmt.Printf("LegacyCompressionMethodLength: %d\n", len(clientHello.LegacyCompressionMethod))
+			fmt.Printf("LegacyCompressionMethod: %x\n\n", clientHello.LegacyCompressionMethod)
 
-			// https://tex2e.github.io/rfc-translater/html/rfc8422.html#5-1-2--Supported-Point-Formats-Extension Supported Point Formats Extension (Extension Type 11)
-			var extensions []Extension
-			cursor := extensionOffset + 2
-			for cursor < extensionOffset+2+int(extensionLength) {
-				length := binary.BigEndian.Uint16(clientHelloBuffer[cursor+2 : cursor+4])
-				extension := Extension{
-					Type:   ExtensionType(binary.BigEndian.Uint16(clientHelloBuffer[cursor : cursor+2])),
-					Length: length,
-					Data:   clientHelloBuffer[cursor+4 : cursor+4+int(length)],
-				}
-				extensions = append(extensions, extension)
-				fmt.Printf("Extension type: %s (%d)\n", ExtensionName[extension.Type], extension.Type)
-				fmt.Printf("Extension length: %d\n", length)
-				switch extension.Type {
-				case SupportedPointFormatsExtensionType:
-					length := uint8(extension.Data[0])
-					var ECPointFormats []uint8
-					for i := 0; i < int(length); i++ {
-						ECPointFormat := uint8(extension.Data[1+i])
-						ECPointFormats = append(ECPointFormats, ECPointFormat)
-						fmt.Printf("  ECPointFormat: %s (%x)\n", ECPointFormatName[ECPointFormat], ECPointFormat)
-					}
-				case SupportedGroupsExtensionType:
-					length := binary.BigEndian.Uint16(extension.Data[0:2])
-					var NamedGroupList []uint16
-					for i := 0; i < int(length); i += 2 {
-						NamedGroup := binary.BigEndian.Uint16(extension.Data[2+i : 2+i+2])
-						NamedGroupList = append(NamedGroupList, NamedGroup)
-						fmt.Printf("  Named Group: %s (%x)\n", NamedGroupName[NamedGroup], NamedGroup)
-					}
-				case SignatureAlgorithmsExtensionType:
-					length := binary.BigEndian.Uint16(extension.Data[0:2])
-					fmt.Println("Signature algoriths extension length:", length)
-					var signatureAlgorithms []uint16
-					for i := 0; i < int(length); i += 2 {
-						signatureAlgorithm := binary.BigEndian.Uint16(extension.Data[2+i : 2+i+2])
-						signatureAlgorithms = append(signatureAlgorithms, signatureAlgorithm)
-						fmt.Printf("  Signature algorithm: %s (%x)\n", SignatureAlgorithmName[signatureAlgorithm], signatureAlgorithm)
-					}
-				case KeyShareExtensionType:
-					length := binary.BigEndian.Uint16(extension.Data[0:2])
-					fmt.Println("Key share extension length:", length)
-					var clientShares []KeyShareEntry
-					keyShareCursor := 2
-					for keyShareCursor < int(length) {
-						group := binary.BigEndian.Uint16(extension.Data[keyShareCursor : keyShareCursor+2])
-						keyExchangeDataLength := binary.BigEndian.Uint16(extension.Data[keyShareCursor+2 : keyShareCursor+4])
-						clientShare := KeyShareEntry{
-							Group:           group,
-							Length:          keyExchangeDataLength,
-							KeyExchangeData: extension.Data[keyShareCursor+4 : keyShareCursor+4+int(keyExchangeDataLength)],
-						}
-						clientShares = append(clientShares, clientShare)
-						fmt.Printf("  Group: %s (%x)\n", NamedGroupName[group], group)
-						fmt.Printf("  Length: %d\n", keyExchangeDataLength)
-						fmt.Printf("  KeyExchangeData: %x\n", clientShare.KeyExchangeData)
-						clientECDHPublicKey = clientShare.KeyExchangeData
-						keyShareCursor += 4 + int(keyExchangeDataLength)
-					}
-				default:
-					if length > 0 {
-						fmt.Printf("Extension data: %x\n", clientHelloBuffer[cursor+4:cursor+4+int(length)])
-					}
-				}
-				fmt.Println()
-				cursor += 4 + int(length)
-			}
-			// TLS_AES_128_GCM_SHA256, secp256r1
-			ecdhServerPrivateKey, serverHello, err := constructServerHello(ecdh.P256(), 0x0017, 0x1301, legacySessionID)
+			fmt.Println("Extensions")
+			extensions := clientHello.parseExtensions()
+			fmt.Println()
+
+			// ServerHello
+			ecdhServerPrivateKey, serverHello, err := constructServerHello(ecdh.P256(), secp256r1, TLS_AES_128_GCM_SHA256, clientHello.LegacySessionID)
 			if err != nil {
 				fmt.Println("Error constructing ServerHello message:", err)
 				return
 			}
-			serverHelloHandshake := HandshakeMessage[ServerHelloMessage]{
-				MsgType: ServerHello,
-				Length:  uint32(len(serverHello.Bytes())),
-				Message: *serverHello,
+			serverHelloHandshake := Handshake[ServerHelloMessage]{
+				MsgType:          ServerHello,
+				Length:           uint32(len(serverHello.Bytes())),
+				HandshakeMessage: *serverHello,
 			}
 
 			handshakeResponse = TLSPlainText{
-				TLSContentType:      Handshake, // 0x16
-				LegacyRecordVersion: TLS12,     // 0x0303
+				ContentType:         HandshakeRecord, // 0x16
+				LegacyRecordVersion: TLS12,           // 0x0303
 				Length:              uint16(len(serverHelloHandshake.Bytes())),
 				Fragment:            serverHelloHandshake.Bytes(),
 			}
@@ -612,12 +758,14 @@ func handleConnection(conn net.Conn) {
 
 			// ChangeCipherSpec, is this necessary?
 			conn.Write(TLSPlainText{
-				TLSContentType:      ChangeCipherSpec, // 0x14
-				LegacyRecordVersion: TLS12,            // 0x0303
+				ContentType:         ChangeCipherSpecRecord, // 0x14
+				LegacyRecordVersion: TLS12,                  // 0x0303
 				Length:              1,
 				Fragment:            []byte{1},
 			}.Bytes())
 
+			keyShareExtension := extensions[KeyShareExtensionType].(KeyShareExtension)
+			clientECDHPublicKey := keyShareExtension.ClientShares[0].KeyExchangeData
 			secrets, err := generateSecrets(ecdh.P256(), clientECDHPublicKey, ecdhServerPrivateKey)
 			if err != nil {
 				fmt.Println("Error generating secrets:", err)
@@ -632,12 +780,12 @@ func handleConnection(conn net.Conn) {
 				Extensions: []Extension{},
 			}
 			encryptedExtensionsMessage, err := encryptMessage(serverWriteKey, serverWriteIV, TLSInnerPlainText{
-				Content: HandshakeMessage[EncryptedExtensionsMessage]{
-					MsgType: EncryptedExtensions,
-					Length:  uint32(len(extentions.Bytes())),
-					Message: extentions,
+				Content: Handshake[EncryptedExtensionsMessage]{
+					MsgType:          EncryptedExtensions,
+					Length:           uint32(len(extentions.Bytes())),
+					HandshakeMessage: extentions,
 				}.Bytes(),
-				ContentType: Handshake,
+				ContentType: HandshakeRecord,
 			}.Bytes(), 0)
 			if err != nil {
 				fmt.Println("Error encrypting message:", err)
@@ -660,12 +808,12 @@ func handleConnection(conn net.Conn) {
 			// TODO: Encrypt the certificate to construct Certificate message
 			// AES_128_GCMで暗号化
 			encryptedHandshakeCertificateMessage, err := encryptMessage(serverWriteKey, serverWriteIV, TLSInnerPlainText{
-				Content: HandshakeMessage[CertificateMessage]{
-					MsgType: Certificate,
-					Length:  uint32(len(certificateMessage.Bytes())),
-					Message: *certificateMessage,
+				Content: Handshake[CertificateMessage]{
+					MsgType:          Certificate,
+					Length:           uint32(len(certificateMessage.Bytes())),
+					HandshakeMessage: *certificateMessage,
 				}.Bytes(),
-				ContentType: Handshake,
+				ContentType: HandshakeRecord,
 			}.Bytes(), 1)
 			if err != nil {
 				fmt.Println("Error encrypting message:", err)
@@ -687,34 +835,6 @@ func handleConnection(conn net.Conn) {
 	// クライアントに対して簡単な応答を送信
 	// response := "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
 	// conn.Write([]byte(response))
-}
-
-func TranscriptHash(hash func() hash.Hash, messages [][]byte) []byte {
-	h := hash()
-	for _, message := range messages {
-		h.Write(message)
-	}
-	return h.Sum(nil)
-}
-
-func HKDFExpandLabel(hash func() hash.Hash, secret []byte, label string, content []byte, length int) ([]byte, error) {
-	hkdflabel := HKDFLabel{
-		Length:  uint16(length),
-		Label:   "tls13 " + label,
-		Context: content,
-	}
-
-	hkdfExpand := hkdf.Expand(hash, secret, hkdflabel.Bytes())
-	derivedSecret := make([]byte, length)
-	_, err := hkdfExpand.Read(derivedSecret)
-	if err != nil {
-		return nil, err
-	}
-	return derivedSecret, nil
-}
-
-func DeriveSecret(hash func() hash.Hash, secret []byte, label string, messages [][]byte) ([]byte, error) {
-	return HKDFExpandLabel(hash, secret, label, TranscriptHash(hash, messages), hash().Size())
 }
 
 func generateSecrets(curve ecdh.Curve, clientPublicKeyBytes []byte, serverPrivateKey *ecdh.PrivateKey) (*Secrets, error) {
@@ -801,8 +921,7 @@ func constructCertificate() (*CertificateMessage, error) {
 	}, nil
 }
 
-func constructServerHello(curve ecdh.Curve, namedGroup uint16, cipherSuite uint16, sessionID []byte) (*ecdh.PrivateKey, *ServerHelloMessage, error) {
-	// ランダムデータの生成 (32バイト)
+func constructServerHello(curve ecdh.Curve, namedGroup NamedGroup, cipherSuite CipherSuite, sessionID []byte) (*ecdh.PrivateKey, *ServerHelloMessage, error) {
 	randomData := make([]byte, 32)
 	_, err := rand.Read(randomData)
 	if err != nil {
@@ -821,7 +940,7 @@ func constructServerHello(curve ecdh.Curve, namedGroup uint16, cipherSuite uint1
 		Length: 2 + 2 + uint16(len(privateKey.PublicKey().Bytes())),
 		ClientShares: []KeyShareEntry{
 			{
-				Group:           namedGroup,
+				Group:           uint16(namedGroup),
 				Length:          uint16(len(privateKey.PublicKey().Bytes())),
 				KeyExchangeData: privateKey.PublicKey().Bytes(),
 			},
