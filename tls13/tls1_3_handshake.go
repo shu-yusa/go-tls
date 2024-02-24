@@ -2,8 +2,10 @@ package tls13
 
 import (
 	"crypto/ecdh"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -136,34 +138,45 @@ func handleConnection(conn net.Conn) {
 			fmt.Printf("Server IV: %x\n\n", serverWriteIV)
 
 			// EncryptedExtensions message
-			extentions := EncryptedExtensionsMessage{
+			encryptedExtensions := EncryptedExtensionsMessage{
 				Extensions: []Extension{},
 			}
+			encryptedExtensionsHandshakeMessage := Handshake[EncryptedExtensionsMessage]{
+				MsgType:          EncryptedExtensions,
+				Length:           uint32(len(encryptedExtensions.Bytes())),
+				HandshakeMessage: encryptedExtensions,
+			}
 			encryptedExtensionsTLSRecord, err := NewTLSCipherMessageText(serverWriteKey, serverWriteIV, TLSInnerPlainText{
-				Content: Handshake[EncryptedExtensionsMessage]{
-					MsgType:          EncryptedExtensions,
-					Length:           uint32(len(extentions.Bytes())),
-					HandshakeMessage: extentions,
-				}.Bytes(),
+				Content:     encryptedExtensionsHandshakeMessage.Bytes(),
 				ContentType: HandshakeRecord,
 			}, 0)
 			fmt.Printf("Encrypted EncryptedExtensions TLS Record: %x\n\n", encryptedExtensionsTLSRecord.Bytes())
 			conn.Write(encryptedExtensionsTLSRecord.Bytes())
 
 			// Certificate message
-			certificateMessage, err := NewCertificateMessage("server.crt", "server.key")
+			serverCert, err := tls.LoadX509KeyPair("server.crt", "server.key")
 			if err != nil {
-				fmt.Println("Error in constructing certificate:", err)
+				fmt.Println("Error in loading server certificate:", err)
 				return
+			}
+			certificateMessage := CertificateMessage{
+				CertificateRequestContext: []byte{},
+				CertificateList: []CertificateEntry{
+					{
+						CertType: X509,
+						CertData: serverCert.Certificate[0],
+					},
+				},
+			}
+			certificateMessageHandshakeMessage := Handshake[CertificateMessage]{
+				MsgType:          Certificate,
+				Length:           uint32(len(certificateMessage.Bytes())),
+				HandshakeMessage: certificateMessage,
 			}
 			fmt.Printf("Certificate: %x\n", certificateMessage.Bytes())
 			fmt.Printf("Certificate Length: %d\n\n", len(certificateMessage.Bytes()))
 			certificateTLSRecord, err := NewTLSCipherMessageText(serverWriteKey, serverWriteIV, TLSInnerPlainText{
-				Content: Handshake[CertificateMessage]{
-					MsgType:          Certificate,
-					Length:           uint32(len(certificateMessage.Bytes())),
-					HandshakeMessage: certificateMessage,
-				}.Bytes(),
+				Content:     certificateMessageHandshakeMessage.Bytes(),
 				ContentType: HandshakeRecord,
 			}, 1)
 			if err != nil {
@@ -172,6 +185,46 @@ func handleConnection(conn net.Conn) {
 			}
 			fmt.Printf("Certificate TLS Record: %x\n\n", certificateTLSRecord.Bytes())
 			conn.Write(certificateTLSRecord.Bytes())
+
+			// CertificateVerify message
+			serverPriv, ok := serverCert.PrivateKey.(*ecdsa.PrivateKey)
+			if !ok {
+				fmt.Println("Error in type assertion of server private key")
+				return
+			}
+			signature, err := signCertificate(
+				serverPriv,
+				tlsRecord.Fragment,                          // ClientHello
+				serverHelloTLSRecord.Fragment,               // ServerHello
+				encryptedExtensionsHandshakeMessage.Bytes(), // EncryptedExtensions
+				certificateMessageHandshakeMessage.Bytes(),  // Certificate
+			)
+			if err != nil {
+				fmt.Println("Error in signing certificate:", err)
+				return
+			}
+			fmt.Printf("Signature: %x\n", signature)
+			certificateVerifyMessage := CertificateVerifyMessage{
+				algorithm: ecdsa_secp256r1_sha256,
+				signature: signature,
+			}
+
+			certificateVerifyTLSRecord, err := NewTLSCipherMessageText(serverWriteKey, serverWriteIV, TLSInnerPlainText{
+				Content: Handshake[CertificateVerifyMessage]{
+					MsgType:          CertificateVerify,
+					Length:           uint32(len(certificateVerifyMessage.Bytes())),
+					HandshakeMessage: certificateVerifyMessage,
+				}.Bytes(),
+				ContentType: HandshakeRecord,
+			}, 2)
+			if err != nil {
+				fmt.Println("Error in encrypting CertificateVerify message:", err)
+				return
+			}
+			fmt.Printf("CertificateVerify TLS Record: %x\n\n", certificateVerifyTLSRecord.Bytes())
+			conn.Write(certificateVerifyTLSRecord.Bytes())
+
+			// TODO: implement Finished message
 		}
 
 		// fmt.Printf("ServerHello: %x\n", handshakeResponse.Bytes())

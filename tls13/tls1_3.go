@@ -1,11 +1,13 @@
 package tls13
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
+	"crypto/ecdsa"
 	"crypto/rand"
-	"crypto/tls"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"hash"
@@ -77,6 +79,14 @@ type (
 	EncryptedExtensionsMessage struct {
 		Extensions []Extension
 	}
+	CertificateMessage struct {
+		CertificateRequestContext []byte
+		CertificateList           []CertificateEntry
+	}
+	CertificateVerifyMessage struct {
+		algorithm SignatureScheme
+		signature []byte
+	}
 
 	Extension struct {
 		Type   ExtensionType
@@ -140,11 +150,6 @@ type (
 	CertificateEntry struct {
 		CertType CertificateType
 		CertData []byte
-	}
-
-	CertificateMessage struct {
-		CertificateRequestContext []byte
-		CertificateList           []CertificateEntry
 	}
 )
 
@@ -466,6 +471,15 @@ func (c CertificateMessage) Bytes() []byte {
 	return append(cert, entryBytes...)
 }
 
+func (c CertificateVerifyMessage) Bytes() []byte {
+	return append([]byte{
+		byte(uint8(c.algorithm >> 8)),
+		byte(uint8(c.algorithm)),
+		byte(len(c.signature) >> 8),
+		byte(len(c.signature)),
+	}, c.signature...)
+}
+
 func NewClientHello(clientHelloBuffer []byte) ClientHelloMessage {
 	legacyVersion := ProtocolVersion(binary.BigEndian.Uint16(clientHelloBuffer[0:2])) // 2 bytes
 	random := clientHelloBuffer[2:34]                                                 // 32 bytes
@@ -718,20 +732,19 @@ func encryptTLSInnerPlaintext(key, iv []byte, plaintext TLSInnerPlainText, seque
 	return encrypted, nil
 }
 
-func NewCertificateMessage(certPath, keyPath string) (CertificateMessage, error) {
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-	if err != nil {
-		return CertificateMessage{}, err
-	}
-	certificateEntry := CertificateEntry{
-		CertType: X509,
-		CertData: cert.Certificate[0],
-	}
+func signCertificate(priv *ecdsa.PrivateKey, handshakeContext ...[]byte) ([]byte, error) {
+	signatureTarget := bytes.Repeat([]byte{0x20}, 64)
+	signatureTarget = append(signatureTarget, []byte("TLS 1.3, server CertificateVerify")...)
+	signatureTarget = append(signatureTarget, 0x00) // separator
+	signatureTarget = append(signatureTarget, TranscriptHash(sha256.New, handshakeContext)...)
 
-	return CertificateMessage{
-		CertificateRequestContext: []byte{},
-		CertificateList:           []CertificateEntry{certificateEntry},
-	}, nil
+	hashed := sha256.Sum256(signatureTarget)
+	signature, err := ecdsa.SignASN1(rand.Reader, priv, hashed[:])
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("length of signature: %d\n", len(signature))
+	return signature, err
 }
 
 func NewServerHello(publicKey *ecdh.PublicKey, namedGroup NamedGroup, cipherSuite CipherSuite, sessionID []byte) (ServerHelloMessage, error) {
