@@ -2,7 +2,6 @@ package tls13
 
 import (
 	"bytes"
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
@@ -36,7 +35,7 @@ type (
 )
 
 var (
-	AcceptableGetRequest = "GET / HTTP/1.1\r\nHost: localhost\r\n"
+	acceptableGetRequest = "GET / HTTP/1.1\r\nHost: localhost\r\n"
 	internalErroAlert    = Alert{level: fatal, description: internal_error}
 )
 
@@ -70,9 +69,18 @@ func Server() {
 				alert := handleMessage(conn, tlsContext, &sequenceNumbers, &handshakeFinished, &applicationDataBuffer)
 				fmt.Printf("Sequence numbers: %v\n", sequenceNumbers.appKeyServerSeqNum)
 				if alert != nil {
+					fmt.Println("Sending alert to the client")
+					var key, iv []byte
+					if tlsContext.applicationTrafficSecrets.serverWriteKey != nil {
+						key = tlsContext.applicationTrafficSecrets.serverWriteKey
+						iv = tlsContext.applicationTrafficSecrets.serverWriteIV
+					} else {
+						key = tlsContext.trafficSecrets.serverWriteKey
+						iv = tlsContext.trafficSecrets.serverWriteIV
+					}
 					encryptedResponse, _ := NewTLSCipherMessageText(
-						tlsContext.applicationTrafficSecrets.serverWriteKey,
-						tlsContext.applicationTrafficSecrets.serverWriteIV,
+						key,
+						iv,
 						TLSInnerPlainText{
 							content:     alert.Bytes(),
 							contentType: AlertRecord,
@@ -150,15 +158,27 @@ func handleMessage(
 			extensions := clientHello.parseExtensions()
 			fmt.Println()
 
+			keyShareExtension := extensions[KeyShareExtensionType].(KeyShareExtension)
+
+			keySharedEntry, selectedCurve := keyShareExtension.selectECDHKeyShare()
+			if selectedCurve == nil {
+				fmt.Println("Unsupported curve")
+				return &internalErroAlert
+			}
+			hasher := sha256.New
+			fmt.Printf("Selected curve: %s (%x)\n", NamedGroupName[keySharedEntry.group], keySharedEntry.group)
+
+			clientECDHPublicKey := keySharedEntry.keyExchangeData
+
 			// ServerHello message
-			ecdhServerPrivateKey, err := ecdh.P256().GenerateKey(rand.Reader)
+			ecdhServerPrivateKey, err := selectedCurve.GenerateKey(rand.Reader)
 			if err != nil {
 				fmt.Println("Error in calculating ECDH private key")
 				return &internalErroAlert
 			}
 			fmt.Printf("ECDH Server Private key:%x\n", ecdhServerPrivateKey.Bytes())
 			fmt.Printf("ECDH Server Public key:%x\n", ecdhServerPrivateKey.PublicKey().Bytes())
-			serverHello, err := NewServerHello(ecdhServerPrivateKey.PublicKey(), secp256r1, TLS_AES_128_GCM_SHA256, clientHello.legacySessionID)
+			serverHello, err := NewServerHello(ecdhServerPrivateKey.PublicKey(), keySharedEntry.group, TLS_AES_128_GCM_SHA256, clientHello.legacySessionID)
 			if err != nil {
 				fmt.Println("Error constructing ServerHello message:", err)
 				return &internalErroAlert
@@ -177,7 +197,7 @@ func handleMessage(
 			fmt.Printf("ServerHello: %x\n\n", serverHelloTLSRecord.Bytes())
 			conn.Write(serverHelloTLSRecord.Bytes())
 
-			// // ChangeCipherSpec message, is this necessary?
+			// // ChangeCipherSpec message
 			// conn.Write(TLSPlainText{
 			// 	contentType:         ChangeCipherSpecRecord, // 0x14
 			// 	legacyRecordVersion: TLS12,                  // 0x0303
@@ -185,9 +205,7 @@ func handleMessage(
 			// 	fragment:            []byte{1},
 			// }.Bytes())
 
-			keyShareExtension := extensions[KeyShareExtensionType].(KeyShareExtension)
-			clientECDHPublicKey := keyShareExtension.clientShares[0].keyExchangeData
-			secrets, err := generateSecrets(sha256.New, ecdh.P256(), clientECDHPublicKey, ecdhServerPrivateKey)
+			secrets, err := generateSecrets(hasher, selectedCurve, clientECDHPublicKey, ecdhServerPrivateKey)
 			if err != nil {
 				fmt.Println("Error generating secrets:", err)
 				return &internalErroAlert
@@ -307,7 +325,7 @@ func handleMessage(
 
 			// Finished message
 			finishedMessage, err := newFinishedMessage(
-				sha256.New,
+				hasher,
 				trafficSecrets.serverHandshakeTrafficSecret,
 				tlsRecord.fragment,                   // ClientHello
 				serverHelloTLSRecord.fragment,        // ServerHello
@@ -445,7 +463,7 @@ func handleMessage(
 			*applicationBuffer = append(*applicationBuffer, tlsInnerPlainText.content...)
 			requestMessage := string(*applicationBuffer)
 			if strings.HasSuffix(requestMessage, "\r\n\r\n") {
-				if strings.HasPrefix(requestMessage, AcceptableGetRequest) {
+				if strings.HasPrefix(requestMessage, acceptableGetRequest) {
 					fmt.Println("Received HTTP GET request")
 					response := "HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\nHello, TLS 1.3!\n"
 					encryptedResponse, err := NewTLSCipherMessageText(

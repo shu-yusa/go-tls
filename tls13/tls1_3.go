@@ -125,7 +125,7 @@ type (
 	}
 
 	KeyShareEntry struct {
-		group           uint16
+		group           NamedGroup
 		length          uint16
 		keyExchangeData []byte
 	}
@@ -307,102 +307,123 @@ const (
 // https://datatracker.ietf.org/doc/html/rfc5288
 // https://tex2e.github.io/rfc-translater/html/rfc5246.html#A-5--The-Cipher-Suite
 
-var ProtocolVersionName = map[ProtocolVersion]string{
-	TLS10: "TLS 1.0",
-	TLS11: "TLS 1.1",
-	TLS12: "TLS 1.2",
-	TLS13: "TLS 1.3",
-}
+var (
+	SupportedCurves = map[NamedGroup]ecdh.Curve{
+		secp256r1: ecdh.P256(),
+		x25519:    ecdh.X25519(),
+	}
 
-var ContentTypeName = map[ContentType]string{
-	InvalidRecord:          "Invalid Record",
-	ChangeCipherSpecRecord: "Change Cipher Spec",
-	AlertRecord:            "Alert",
-	HandshakeRecord:        "Handshake",
-	ApplicationDataRecord:  "Application Data",
-}
+	ProtocolVersionName = map[ProtocolVersion]string{
+		TLS10: "TLS 1.0",
+		TLS11: "TLS 1.1",
+		TLS12: "TLS 1.2",
+		TLS13: "TLS 1.3",
+	}
 
-var CipherSuiteName = map[CipherSuite]string{
-	TLS_AES_128_GCM_SHA256:                        "TLS_AES_128_GCM_SHA256",
-	TLS_AES_256_GCM_SHA384:                        "TLS_AES_256_GCM_SHA384",
-	TLS_CHACHA20_POLY1305_SHA256:                  "TLS_CHACHA20_POLY1305_SHA256",
-	TLS_AES_128_CCM_SHA256:                        "TLS_AES_128_CCM_SHA256",
-	TLS_AES_128_CCM_8_SHA256:                      "TLS_AES_128_CCM_8_SHA256",
-	TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:       "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
-	TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:       "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
-	TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:         "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-	TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:         "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
-	TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:            "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
-	TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:            "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
-	TLS_RSA_WITH_AES_128_GCM_SHA256:               "TLS_RSA_WITH_AES_128_GCM_SHA256",
-	TLS_RSA_WITH_AES_256_GCM_SHA384:               "TLS_RSA_WITH_AES_256_GCM_SHA384",
-	TLS_RSA_WITH_AES_128_CBC_SHA:                  "TLS_RSA_WITH_AES_128_CBC_SHA",
-	TLS_RSA_WITH_AES_256_CBC_SHA:                  "TLS_RSA_WITH_AES_256_CBC_SHA",
-	TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:   "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
-	TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256: "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
-}
+	ContentTypeName = map[ContentType]string{
+		InvalidRecord:          "Invalid Record",
+		ChangeCipherSpecRecord: "Change Cipher Spec",
+		AlertRecord:            "Alert",
+		HandshakeRecord:        "Handshake",
+		ApplicationDataRecord:  "Application Data",
+	}
 
-var ExtensionName = map[ExtensionType]string{
-	ServerNameExtensionType:                 "Server Name",
-	StatusRequestExtensionType:              "Status Request",
-	SupportedPointFormatsExtensionType:      "Supported Point Formats",
-	SupportedGroupsExtensionType:            "Supported Groups",
-	ApplicationLayerProtocolNegotiationType: "Application Layer Protocol Negotiation",
-	SignedCertificateTimestampExtensionType: "Signed Certificate Timestamp",
-	CompressCertificateExtensionType:        "Compress Certificate",
-	SignatureAlgorithmsExtensionType:        "Signature Algorithms",
-	SessionTicketExtensionType:              "Session Ticket",
-	EncryptThenMacExtensionType:             "Encrypt-then-MAC",
-	ExtendedMasterSecretExtensionType:       "Extended Master Secret",
-	SupportedVersionsExtensionType:          "Supported Versions",
-	PSKKeyExchangeModesExtensionType:        "PSK Key Exchange Modes",
-	KeyShareExtensionType:                   "Key Share",
-	EncryptedClientHelloExtensionType:       "Encrypted Client Hello",
-	RenegotiationInfoExtensionType:          "Renegotiation Info",
-}
+	CipherSuiteName = map[CipherSuite]string{
+		TLS_AES_128_GCM_SHA256:                        "TLS_AES_128_GCM_SHA256",
+		TLS_AES_256_GCM_SHA384:                        "TLS_AES_256_GCM_SHA384",
+		TLS_CHACHA20_POLY1305_SHA256:                  "TLS_CHACHA20_POLY1305_SHA256",
+		TLS_AES_128_CCM_SHA256:                        "TLS_AES_128_CCM_SHA256",
+		TLS_AES_128_CCM_8_SHA256:                      "TLS_AES_128_CCM_8_SHA256",
+		TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:       "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+		TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:       "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+		TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:         "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+		TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:         "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+		TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:            "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+		TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:            "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+		TLS_RSA_WITH_AES_128_GCM_SHA256:               "TLS_RSA_WITH_AES_128_GCM_SHA256",
+		TLS_RSA_WITH_AES_256_GCM_SHA384:               "TLS_RSA_WITH_AES_256_GCM_SHA384",
+		TLS_RSA_WITH_AES_128_CBC_SHA:                  "TLS_RSA_WITH_AES_128_CBC_SHA",
+		TLS_RSA_WITH_AES_256_CBC_SHA:                  "TLS_RSA_WITH_AES_256_CBC_SHA",
+		TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:   "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+		TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256: "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+	}
 
-var ECPointFormatName = map[uint8]string{
-	0: "uncompressed",
-	1: "ansiX962_compressed_prime",
-	2: "ansiX962_compressed_char2",
-}
+	ExtensionName = map[ExtensionType]string{
+		ServerNameExtensionType:                 "Server Name",
+		StatusRequestExtensionType:              "Status Request",
+		SupportedPointFormatsExtensionType:      "Supported Point Formats",
+		SupportedGroupsExtensionType:            "Supported Groups",
+		ApplicationLayerProtocolNegotiationType: "Application Layer Protocol Negotiation",
+		SignedCertificateTimestampExtensionType: "Signed Certificate Timestamp",
+		CompressCertificateExtensionType:        "Compress Certificate",
+		SignatureAlgorithmsExtensionType:        "Signature Algorithms",
+		SessionTicketExtensionType:              "Session Ticket",
+		EncryptThenMacExtensionType:             "Encrypt-then-MAC",
+		ExtendedMasterSecretExtensionType:       "Extended Master Secret",
+		SupportedVersionsExtensionType:          "Supported Versions",
+		PSKKeyExchangeModesExtensionType:        "PSK Key Exchange Modes",
+		KeyShareExtensionType:                   "Key Share",
+		EncryptedClientHelloExtensionType:       "Encrypted Client Hello",
+		RenegotiationInfoExtensionType:          "Renegotiation Info",
+	}
 
-var PSKKeyExchangeModeName = map[PSKKeyExchangeMode]string{
-	psk_ke:     "psk_ke",
-	psk_dhe_ke: "psk_dhe_ke",
-}
+	ECPointFormatName = map[uint8]string{
+		0: "uncompressed",
+		1: "ansiX962_compressed_prime",
+		2: "ansiX962_compressed_char2",
+	}
 
-var NamedGroupName = map[NamedGroup]string{
-	secp256r1: "secp256r1",
-	secp384r1: "secp384r1",
-	secp521r1: "secp521r1",
-	x25519:    "x25519",
-	x448:      "x448",
-	ffdhe2048: "ffdhe2048",
-	ffdhe3072: "ffdhe3072",
-	ffdhe4096: "ffdhe4096",
-	ffdhe6144: "ffdhe6144",
-	ffdhe8192: "ffdhe8192",
-}
+	PSKKeyExchangeModeName = map[PSKKeyExchangeMode]string{
+		psk_ke:     "psk_ke",
+		psk_dhe_ke: "psk_dhe_ke",
+	}
 
-var SignatureAlgorithmName = map[SignatureScheme]string{
-	ecdsa_secp256r1_sha256:            "ecdsa_secp256r1_sha256",
-	ecdsa_secp384r1_sha384:            "ecdsa_secp384r1_sha384",
-	ecdsa_secp521r1_sha512:            "ecdsa_secp521r1_sha512",
-	ed25519:                           "ed25519",
-	ed448:                             "ed448",
-	rsa_pss_pss_sha256:                "rsa_pss_pss_sha256",
-	rsa_pss_pss_sha384:                "rsa_pss_pss_sha384",
-	rsa_pss_pss_sha512:                "rsa_pss_pss_sha512",
-	ecdsa_brainpoolP256r1tls13_sha256: "ecdsa_brainpoolP256r1tls13_sha256",
-	ecdsa_brainpoolP384r1tls13_sha384: "ecdsa_brainpoolP384r1tls13_sha384",
-	ecdsa_brainpoolP512r1tls13_sha512: "ecdsa_brainpoolP512r1tls13_sha512",
-	rsa_pss_rsae_sha256:               "rsa_pss_rsae_sha256",
-	rsa_pss_rsae_sha384:               "rsa_pss_rsae_sha384",
-	rsa_pss_rsae_sha512:               "rsa_pss_rsae_sha512",
-	rsa_pkcs1_sha256:                  "rsa_pkcs1_sha256",
-	rsa_pkcs1_sha384:                  "rsa_pkcs1_sha384",
-	rsa_pkcs1_sha512:                  "rsa_pkcs1_sha512",
+	NamedGroupName = map[NamedGroup]string{
+		secp256r1: "secp256r1",
+		secp384r1: "secp384r1",
+		secp521r1: "secp521r1",
+		x25519:    "x25519",
+		x448:      "x448",
+		ffdhe2048: "ffdhe2048",
+		ffdhe3072: "ffdhe3072",
+		ffdhe4096: "ffdhe4096",
+		ffdhe6144: "ffdhe6144",
+		ffdhe8192: "ffdhe8192",
+	}
+
+	SignatureAlgorithmName = map[SignatureScheme]string{
+		ecdsa_secp256r1_sha256:            "ecdsa_secp256r1_sha256",
+		ecdsa_secp384r1_sha384:            "ecdsa_secp384r1_sha384",
+		ecdsa_secp521r1_sha512:            "ecdsa_secp521r1_sha512",
+		ed25519:                           "ed25519",
+		ed448:                             "ed448",
+		rsa_pss_pss_sha256:                "rsa_pss_pss_sha256",
+		rsa_pss_pss_sha384:                "rsa_pss_pss_sha384",
+		rsa_pss_pss_sha512:                "rsa_pss_pss_sha512",
+		ecdsa_brainpoolP256r1tls13_sha256: "ecdsa_brainpoolP256r1tls13_sha256",
+		ecdsa_brainpoolP384r1tls13_sha384: "ecdsa_brainpoolP384r1tls13_sha384",
+		ecdsa_brainpoolP512r1tls13_sha512: "ecdsa_brainpoolP512r1tls13_sha512",
+		rsa_pss_rsae_sha256:               "rsa_pss_rsae_sha256",
+		rsa_pss_rsae_sha384:               "rsa_pss_rsae_sha384",
+		rsa_pss_rsae_sha512:               "rsa_pss_rsae_sha512",
+		rsa_pkcs1_sha256:                  "rsa_pkcs1_sha256",
+		rsa_pkcs1_sha384:                  "rsa_pkcs1_sha384",
+		rsa_pkcs1_sha512:                  "rsa_pkcs1_sha512",
+	}
+)
+
+func (ks KeyShareExtension) selectECDHKeyShare() (*KeyShareEntry, ecdh.Curve) {
+	supportedCurves := map[NamedGroup]ecdh.Curve{
+		secp256r1: ecdh.P256(),
+		x25519:    ecdh.X25519(),
+	}
+	for _, clientShare := range ks.clientShares {
+		curve, ok := supportedCurves[clientShare.group]
+		if ok {
+			return &clientShare, curve
+		}
+	}
+	return nil, nil
 }
 
 func (t TLSInnerPlainText) Bytes() []byte {
@@ -625,7 +646,7 @@ func (ch ClientHelloMessage) parseExtensions() map[ExtensionType]interface{} {
 				group := binary.BigEndian.Uint16(extension.data[keyShareCursor : keyShareCursor+2])
 				keyExchangeDataLength := binary.BigEndian.Uint16(extension.data[keyShareCursor+2 : keyShareCursor+4])
 				clientShare := KeyShareEntry{
-					group:           group,
+					group:           NamedGroup(group),
 					length:          keyExchangeDataLength,
 					keyExchangeData: extension.data[keyShareCursor+4 : keyShareCursor+4+int(keyExchangeDataLength)],
 				}
@@ -897,7 +918,7 @@ func NewServerHello(publicKey *ecdh.PublicKey, namedGroup NamedGroup, cipherSuit
 		length: 2 + 2 + uint16(len(publicKeyBytes)),
 		clientShares: []KeyShareEntry{
 			{
-				group:           uint16(namedGroup),
+				group:           namedGroup,
 				length:          uint16(len(publicKeyBytes)),
 				keyExchangeData: publicKeyBytes,
 			},
