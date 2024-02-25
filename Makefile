@@ -10,3 +10,6 @@ server-crt:
 	openssl req -new -key server.key -out server.csr -subj "/C=JP/ST=Tokyo/L=Tokyo/O=MyOrganization/OU=MyUnit/CN=localhost"
 	@# Signing the public key
 	openssl req -x509 -sha256 -days 365 -key server.key -in server.csr -out server.crt
+
+request:
+	openssl s_client -debug -connect localhost:443 -tls1_3 -noservername -crlf -curves secp256r1:x25519 -msg -security_debug_verbose -trace -keylogfile keylog.txt

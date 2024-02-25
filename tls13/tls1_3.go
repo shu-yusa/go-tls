@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/ecdsa"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -33,123 +34,131 @@ type (
 
 	// TLS Record before encryption
 	TLSPlainText struct {
-		ContentType         ContentType
-		LegacyRecordVersion ProtocolVersion
-		Length              uint16
-		Fragment            []byte
+		contentType         ContentType
+		legacyRecordVersion ProtocolVersion
+		length              uint16
+		fragment            []byte
 	}
 
 	// TLS Record used as a payload for encryption
 	TLSInnerPlainText struct {
-		Content     []byte
-		ContentType ContentType // real content type
-		Zeros       []byte      // padding
+		content     []byte
+		contentType ContentType // real content type
+		zeros       []byte      // padding
 	}
 
 	TLSCipherMessageText struct {
-		ContentType     ContentType
-		LegacyVersion   ProtocolVersion
-		Length          uint16
-		EncryptedRecord []byte // Encrypted TLSInnerPlainText
+		contentType     ContentType
+		legacyVersion   ProtocolVersion
+		length          uint16
+		encryptedRecord []byte // Encrypted TLSInnerPlainText
 	}
 
 	Handshake[T HandshakeEncoder] struct {
-		MsgType          HandshakeType
-		Length           uint32
-		HandshakeMessage T
+		msgType          HandshakeType
+		length           uint32
+		handshakeMessage T
 	}
 
 	// HandshakeEncoder
 	ClientHelloMessage struct {
-		LegacyVersion           ProtocolVersion
-		Random                  []byte
-		LegacySessionID         []byte
-		CipherSuites            []CipherSuite
-		LegacyCompressionMethod []byte
-		Extensions              []Extension
+		legacyVersion           ProtocolVersion
+		random                  []byte
+		legacySessionID         []byte
+		cipherSuites            []CipherSuite
+		legacyCompressionMethod []byte
+		extensions              []Extension
 	}
 	ServerHelloMessage struct {
-		LegacyVersion     ProtocolVersion
-		RandomBytes       [32]byte
-		SessionID         []byte
-		CipherSuite       CipherSuite
-		CompressionMethod uint8
-		Extensions        []Extension
+		legacyVersion     ProtocolVersion
+		randomBytes       [32]byte
+		sessionID         []byte
+		cipherSuite       CipherSuite
+		compressionMethod uint8
+		extensions        []Extension
 	}
 	EncryptedExtensionsMessage struct {
-		Extensions []Extension
+		extensions []Extension
 	}
 	CertificateMessage struct {
-		CertificateRequestContext []byte
-		CertificateList           []CertificateEntry
+		certificateRequestContext []byte
+		certificateList           []CertificateEntry
 	}
 	CertificateVerifyMessage struct {
 		algorithm SignatureScheme
 		signature []byte
 	}
+	FinishedMessage struct {
+		verifyData []byte
+	}
 
 	Extension struct {
-		Type   ExtensionType
-		Length uint16
-		Data   []byte
+		extensionType ExtensionType
+		length        uint16
+		data          []byte
 	}
 
 	ClientSupportedVersionsExtension struct {
-		SelectedVersions []ProtocolVersion
+		selectedVersions []ProtocolVersion
 	}
 
 	SupportedPointFormatsExtension struct {
-		Length         uint8
-		ECPointFormats []uint8
+		length         uint8
+		ecPointFormats []uint8
 	}
 
 	PSKKeyExchangeModesExtension struct {
-		Length  uint8
-		KEModes []PSKKeyExchangeMode
+		length  uint8
+		keModes []PSKKeyExchangeMode
 	}
 
 	SupportedGroupExtension struct {
-		Length         uint16
-		NamedGroupList []NamedGroup
+		length         uint16
+		namedGroupList []NamedGroup
 	}
 
 	SignatureAlgorithmsExtension struct {
-		Length                       uint16
-		SupportedSignatureAlgorithms []SignatureScheme
+		length                       uint16
+		supportedSignatureAlgorithms []SignatureScheme
 	}
 
 	KeyShareEntry struct {
-		Group           uint16
-		Length          uint16
-		KeyExchangeData []byte
+		group           uint16
+		length          uint16
+		keyExchangeData []byte
 	}
 
 	KeyShareExtension struct {
-		Length       uint16
-		ClientShares []KeyShareEntry
+		length       uint16
+		clientShares []KeyShareEntry
 	}
 
 	HKDFLabel struct {
-		Length  uint16
-		Label   string
-		Context []byte
+		length  uint16
+		label   string
+		context []byte
 	}
 
 	Secrets struct {
-		Hash                           func() hash.Hash
-		SharedSecret                   []byte
-		EarlySecret                    []byte
-		HandshakeSecret                []byte
-		MasterSecret                   []byte
-		ClientHandshakeTrafficSecret   []byte
-		ServerHandshakeTrafficSecret   []byte
-		ClientApplicationTrafficSecret []byte
-		ServerApplicationTrafficSecret []byte
+		hash            func() hash.Hash
+		sharedSecret    []byte
+		earlySecret     []byte
+		handshakeSecret []byte
+		masterSecret    []byte
+	}
+
+	TrafficSecrets struct {
+		clientHandshakeTrafficSecret   []byte
+		serverHandshakeTrafficSecret   []byte
+		clientApplicationTrafficSecret []byte
+		serverApplicationTrafficSecret []byte
+		serverWriteKey                 []byte
+		serverWriteIV                  []byte
 	}
 
 	CertificateEntry struct {
-		CertType CertificateType
-		CertData []byte
+		certType CertificateType
+		certData []byte
 	}
 )
 
@@ -345,50 +354,50 @@ var SignatureAlgorithmName = map[SignatureScheme]string{
 
 func (t TLSPlainText) Bytes() []byte {
 	return append([]byte{
-		byte(uint8(t.ContentType)),
-		byte(uint8(t.LegacyRecordVersion >> 8)),
-		byte(uint8(t.LegacyRecordVersion)),
-		byte(uint8(t.Length >> 8)),
-		byte(uint8(t.Length)),
-	}, t.Fragment...)
+		byte(uint8(t.contentType)),
+		byte(uint8(t.legacyRecordVersion >> 8)),
+		byte(uint8(t.legacyRecordVersion)),
+		byte(uint8(t.length >> 8)),
+		byte(uint8(t.length)),
+	}, t.fragment...)
 }
 
 func (t TLSInnerPlainText) Bytes() []byte {
-	return append(append(t.Content, byte(t.ContentType)), t.Zeros...)
+	return append(append(t.content, byte(t.contentType)), t.zeros...)
 }
 
 func (t TLSCipherMessageText) Bytes() []byte {
 	return append([]byte{
-		byte(uint8(t.ContentType)),
-		byte(uint8(t.LegacyVersion >> 8)),
-		byte(uint8(t.LegacyVersion)),
-		byte(uint8(t.Length >> 8)),
-		byte(uint8(t.Length)),
-	}, t.EncryptedRecord...)
+		byte(uint8(t.contentType)),
+		byte(uint8(t.legacyVersion >> 8)),
+		byte(uint8(t.legacyVersion)),
+		byte(uint8(t.length >> 8)),
+		byte(uint8(t.length)),
+	}, t.encryptedRecord...)
 }
 
 func (hs Handshake[T]) Bytes() []byte {
 	return append([]byte{
-		byte(uint8(hs.MsgType)),
-		byte(uint8(hs.Length >> 16)),
-		byte(uint8(hs.Length >> 8)),
-		byte(uint8(hs.Length)),
-	}, hs.HandshakeMessage.Bytes()...)
+		byte(uint8(hs.msgType)),
+		byte(uint8(hs.length >> 16)),
+		byte(uint8(hs.length >> 8)),
+		byte(uint8(hs.length)),
+	}, hs.handshakeMessage.Bytes()...)
 }
 
 func (sh ServerHelloMessage) Bytes() []byte {
 	serverHello := []byte{}
-	serverHello = append(serverHello, byte(uint8(sh.LegacyVersion>>8)))
-	serverHello = append(serverHello, byte(uint8(sh.LegacyVersion)))
-	serverHello = append(serverHello, sh.RandomBytes[:]...)
-	serverHello = append(serverHello, byte(uint8(len(sh.SessionID))))
-	serverHello = append(serverHello, sh.SessionID...)
-	serverHello = append(serverHello, byte(uint8(sh.CipherSuite>>8)))
-	serverHello = append(serverHello, byte(uint8(sh.CipherSuite)))
-	serverHello = append(serverHello, sh.CompressionMethod)
+	serverHello = append(serverHello, byte(uint8(sh.legacyVersion>>8)))
+	serverHello = append(serverHello, byte(uint8(sh.legacyVersion)))
+	serverHello = append(serverHello, sh.randomBytes[:]...)
+	serverHello = append(serverHello, byte(uint8(len(sh.sessionID))))
+	serverHello = append(serverHello, sh.sessionID...)
+	serverHello = append(serverHello, byte(uint8(sh.cipherSuite>>8)))
+	serverHello = append(serverHello, byte(uint8(sh.cipherSuite)))
+	serverHello = append(serverHello, sh.compressionMethod)
 
 	extensionBytes := []byte{}
-	for _, extension := range sh.Extensions {
+	for _, extension := range sh.extensions {
 		extensionBytes = append(extensionBytes, extension.Bytes()...)
 	}
 
@@ -400,16 +409,16 @@ func (sh ServerHelloMessage) Bytes() []byte {
 
 func (e Extension) Bytes() []byte {
 	return append([]byte{
-		byte(uint8(e.Type >> 8)),
-		byte(uint8(e.Type)),
-		byte(uint8(e.Length >> 8)),
-		byte(uint8(e.Length)),
-	}, e.Data...)
+		byte(uint8(e.extensionType >> 8)),
+		byte(uint8(e.extensionType)),
+		byte(uint8(e.length >> 8)),
+		byte(uint8(e.length)),
+	}, e.data...)
 }
 
 func (ee EncryptedExtensionsMessage) Bytes() []byte {
 	extensionsBytes := []byte{}
-	for _, extension := range ee.Extensions {
+	for _, extension := range ee.extensions {
 		extensionsBytes = append(extensionsBytes, extension.Bytes()...)
 	}
 
@@ -422,35 +431,35 @@ func (ee EncryptedExtensionsMessage) Bytes() []byte {
 
 func (kse KeyShareExtension) Bytes() []byte {
 	extension := []byte{}
-	for _, clientShare := range kse.ClientShares {
+	for _, clientShare := range kse.clientShares {
 		extension = append([]byte{
-			byte(uint8(clientShare.Group >> 8)),
-			byte(uint8(clientShare.Group)),
-			byte(uint8(clientShare.Length >> 8)),
-			byte(uint8(clientShare.Length)),
-		}, clientShare.KeyExchangeData...)
+			byte(uint8(clientShare.group >> 8)),
+			byte(uint8(clientShare.group)),
+			byte(uint8(clientShare.length >> 8)),
+			byte(uint8(clientShare.length)),
+		}, clientShare.keyExchangeData...)
 	}
 	return extension
 }
 
 func (l HKDFLabel) Bytes() []byte {
 	label := []byte{}
-	label = append(label, byte(uint8(l.Length>>8)))
-	label = append(label, byte(uint8(l.Length)))
+	label = append(label, byte(uint8(l.length>>8)))
+	label = append(label, byte(uint8(l.length)))
 
-	labelBytes := []byte(l.Label)
+	labelBytes := []byte(l.label)
 	label = append(label, byte(len(labelBytes)))
 	label = append(label, labelBytes...)
 
-	label = append(label, byte(len(l.Context)))
-	return append(label, l.Context...)
+	label = append(label, byte(len(l.context)))
+	return append(label, l.context...)
 }
 
 func (ce CertificateEntry) Bytes() []byte {
 	certEntry := []byte{}
-	length := len(ce.CertData)
+	length := len(ce.certData)
 	certEntry = append(certEntry, byte(length>>16), byte(length>>8), byte(length))
-	certEntry = append(certEntry, ce.CertData...)
+	certEntry = append(certEntry, ce.certData...)
 	certEntry = append(certEntry, 0, 0) // extensions
 	return certEntry
 }
@@ -458,11 +467,11 @@ func (ce CertificateEntry) Bytes() []byte {
 func (c CertificateMessage) Bytes() []byte {
 	cert := []byte{}
 	// 1 byte for the length of the certificate_request_context
-	cert = append(cert, byte(len(c.CertificateRequestContext)))
-	cert = append(cert, c.CertificateRequestContext...)
+	cert = append(cert, byte(len(c.certificateRequestContext)))
+	cert = append(cert, c.certificateRequestContext...)
 
 	entryBytes := []byte{}
-	for _, entry := range c.CertificateList {
+	for _, entry := range c.certificateList {
 		entryBytes = append(entryBytes, entry.Bytes()...)
 	}
 
@@ -478,6 +487,10 @@ func (c CertificateVerifyMessage) Bytes() []byte {
 		byte(len(c.signature) >> 8),
 		byte(len(c.signature)),
 	}, c.signature...)
+}
+
+func (f FinishedMessage) Bytes() []byte {
+	return f.verifyData
 }
 
 func NewClientHello(clientHelloBuffer []byte) ClientHelloMessage {
@@ -504,118 +517,118 @@ func NewClientHello(clientHelloBuffer []byte) ClientHelloMessage {
 	for cursor < int(extensionLength) {
 		length := binary.BigEndian.Uint16(extensionBuffer[cursor+2 : cursor+4])
 		extensions = append(extensions, Extension{
-			Type:   ExtensionType(binary.BigEndian.Uint16(extensionBuffer[cursor : cursor+2])),
-			Length: length,
-			Data:   extensionBuffer[cursor+4 : cursor+4+int(length)],
+			extensionType: ExtensionType(binary.BigEndian.Uint16(extensionBuffer[cursor : cursor+2])),
+			length:        length,
+			data:          extensionBuffer[cursor+4 : cursor+4+int(length)],
 		})
 		// 4 bytes for Type and Length
 		cursor += 4 + int(length)
 	}
 	return ClientHelloMessage{
-		LegacyVersion:           legacyVersion,
-		Random:                  random,
-		LegacySessionID:         legacySessionID,
-		CipherSuites:            cipherSuites,
-		LegacyCompressionMethod: legacyCompressionMethod,
-		Extensions:              extensions,
+		legacyVersion:           legacyVersion,
+		random:                  random,
+		legacySessionID:         legacySessionID,
+		cipherSuites:            cipherSuites,
+		legacyCompressionMethod: legacyCompressionMethod,
+		extensions:              extensions,
 	}
 }
 
 func (ch ClientHelloMessage) parseExtensions() map[ExtensionType]interface{} {
 	var extensionMap = make(map[ExtensionType]interface{})
-	for _, extension := range ch.Extensions {
-		switch extension.Type {
+	for _, extension := range ch.extensions {
+		switch extension.extensionType {
 		case SupportedPointFormatsExtensionType:
 			fmt.Println("- SupportedPointFormatsExtension")
-			length := uint8(extension.Data[0])
+			length := uint8(extension.data[0])
 			var ECPointFormats []uint8
 			for i := 0; i < int(length); i++ {
-				ECPointFormat := uint8(extension.Data[1+i])
+				ECPointFormat := uint8(extension.data[1+i])
 				ECPointFormats = append(ECPointFormats, ECPointFormat)
 				fmt.Printf("    ECPointFormat: %s (%x)\n", ECPointFormatName[ECPointFormat], ECPointFormat)
 			}
 			extensionMap[SupportedPointFormatsExtensionType] = SupportedPointFormatsExtension{
-				Length:         length,
-				ECPointFormats: ECPointFormats,
+				length:         length,
+				ecPointFormats: ECPointFormats,
 			}
 		case SupportedGroupsExtensionType:
 			fmt.Println("- SupportedGroupsExtension")
-			length := binary.BigEndian.Uint16(extension.Data[0:2])
+			length := binary.BigEndian.Uint16(extension.data[0:2])
 			var NamedGroupList []NamedGroup
 			for i := 0; i < int(length); i += 2 {
-				namedGroup := binary.BigEndian.Uint16(extension.Data[2+i : 2+i+2])
+				namedGroup := binary.BigEndian.Uint16(extension.data[2+i : 2+i+2])
 				NamedGroupList = append(NamedGroupList, NamedGroup(namedGroup))
 				fmt.Printf("    Named Group: %s (%x)\n", NamedGroupName[NamedGroup(namedGroup)], namedGroup)
 			}
 			extensionMap[SupportedGroupsExtensionType] = SupportedGroupExtension{
-				Length:         length,
-				NamedGroupList: NamedGroupList,
+				length:         length,
+				namedGroupList: NamedGroupList,
 			}
 		case SignatureAlgorithmsExtensionType:
 			fmt.Println("- SignatureAlgorithmsExtension")
-			length := binary.BigEndian.Uint16(extension.Data[0:2])
+			length := binary.BigEndian.Uint16(extension.data[0:2])
 			// fmt.Println("  SignatureAlgorithmsExtension length:", length)
 			var signatureAlgorithms []SignatureScheme
 			for i := 0; i < int(length); i += 2 {
-				signatureScheme := binary.BigEndian.Uint16(extension.Data[2+i : 2+i+2])
+				signatureScheme := binary.BigEndian.Uint16(extension.data[2+i : 2+i+2])
 				signatureAlgorithms = append(signatureAlgorithms, SignatureScheme(signatureScheme))
 				fmt.Printf("    Signature algorithm: %s (%x)\n", SignatureAlgorithmName[SignatureScheme(signatureScheme)], signatureScheme)
 			}
 			extensionMap[SignatureAlgorithmsExtensionType] = SignatureAlgorithmsExtension{
-				Length:                       length,
-				SupportedSignatureAlgorithms: signatureAlgorithms,
+				length:                       length,
+				supportedSignatureAlgorithms: signatureAlgorithms,
 			}
 		case KeyShareExtensionType:
 			fmt.Println("- KeyShareExtension")
-			length := binary.BigEndian.Uint16(extension.Data[0:2])
+			length := binary.BigEndian.Uint16(extension.data[0:2])
 			// fmt.Println("  KeyShareExtension length:", length)
 			var clientShares []KeyShareEntry
 			keyShareCursor := 2
 			for keyShareCursor < int(length) {
-				group := binary.BigEndian.Uint16(extension.Data[keyShareCursor : keyShareCursor+2])
-				keyExchangeDataLength := binary.BigEndian.Uint16(extension.Data[keyShareCursor+2 : keyShareCursor+4])
+				group := binary.BigEndian.Uint16(extension.data[keyShareCursor : keyShareCursor+2])
+				keyExchangeDataLength := binary.BigEndian.Uint16(extension.data[keyShareCursor+2 : keyShareCursor+4])
 				clientShare := KeyShareEntry{
-					Group:           group,
-					Length:          keyExchangeDataLength,
-					KeyExchangeData: extension.Data[keyShareCursor+4 : keyShareCursor+4+int(keyExchangeDataLength)],
+					group:           group,
+					length:          keyExchangeDataLength,
+					keyExchangeData: extension.data[keyShareCursor+4 : keyShareCursor+4+int(keyExchangeDataLength)],
 				}
 				clientShares = append(clientShares, clientShare)
 				fmt.Printf("    Group: %s (%x)\n", NamedGroupName[NamedGroup(group)], group)
 				fmt.Printf("    Length: %d\n", keyExchangeDataLength)
-				fmt.Printf("    KeyExchangeData: %x\n", clientShare.KeyExchangeData)
+				fmt.Printf("    KeyExchangeData: %x\n", clientShare.keyExchangeData)
 				keyShareCursor += 4 + int(keyExchangeDataLength)
 			}
 			extensionMap[KeyShareExtensionType] = KeyShareExtension{
-				Length:       length,
-				ClientShares: clientShares,
+				length:       length,
+				clientShares: clientShares,
 			}
 		case ExtendedMasterSecretExtensionType:
 			fmt.Println("- ExtendedMasterSecretExtension")
 		case SupportedVersionsExtensionType:
 			// https://tex2e.github.io/rfc-translater/html/rfc8446.html#4-2-1--Supported-Versions
 			fmt.Println("- SupportedVersionsExtension")
-			length := uint8(extension.Data[0])
+			length := uint8(extension.data[0])
 			versions := []ProtocolVersion{}
 			for i := 0; i < int(length); i += 2 {
-				version := binary.BigEndian.Uint16(extension.Data[1+i : 1+i+2])
+				version := binary.BigEndian.Uint16(extension.data[1+i : 1+i+2])
 				versions = append(versions, ProtocolVersion(version))
 				fmt.Printf("    Version: %s (%x)\n", ProtocolVersionName[ProtocolVersion(version)], version)
 			}
 			extensionMap[SupportedVersionsExtensionType] = ClientSupportedVersionsExtension{
-				SelectedVersions: versions,
+				selectedVersions: versions,
 			}
 		case PSKKeyExchangeModesExtensionType:
 			fmt.Println("- PSKKeyExchangeModesExtension")
-			length := uint8(extension.Data[0])
+			length := uint8(extension.data[0])
 			keModes := []PSKKeyExchangeMode{}
 			for i := 0; i < int(length); i++ {
-				keMode := PSKKeyExchangeMode(extension.Data[1+i])
+				keMode := PSKKeyExchangeMode(extension.data[1+i])
 				keModes = append(keModes, PSKKeyExchangeMode(keMode))
 				fmt.Printf("    PSKKeyExchangeMode: %s (%x)\n", PSKKeyExchangeModeName[PSKKeyExchangeMode(keMode)], keMode)
 			}
 			extensionMap[PSKKeyExchangeModesExtensionType] = PSKKeyExchangeModesExtension{
-				Length:  length,
-				KEModes: keModes,
+				length:  length,
+				keModes: keModes,
 			}
 		case EncryptThenMacExtensionType:
 			// https://tex2e.github.io/rfc-translater/html/rfc7366.html
@@ -624,47 +637,54 @@ func (ch ClientHelloMessage) parseExtensions() map[ExtensionType]interface{} {
 			fmt.Println("- SessionTicketExtension")
 		default:
 			fmt.Printf("- Extension data: %x\n", extension)
-			extensionMap[extension.Type] = extension.Data
+			extensionMap[extension.extensionType] = extension.data
 		}
 	}
 	return extensionMap
 }
 
-func NewTLSCipherMessageText(key, iv []byte, plaintext TLSInnerPlainText, sequenceNumber uint64) (*TLSCipherMessageText, error) {
-	encryptedRecord, err := encryptTLSInnerPlaintext(key, iv, plaintext, sequenceNumber)
+func NewTLSCipherMessageText(trafficSecrets *TrafficSecrets, plaintext TLSInnerPlainText, sequenceNumber uint64) (*TLSCipherMessageText, error) {
+	encryptedRecord, err := encryptTLSInnerPlaintext(trafficSecrets.serverWriteKey, trafficSecrets.serverWriteIV, plaintext, sequenceNumber)
 	if err != nil {
 		return nil, err
 	}
 	return &TLSCipherMessageText{
-		ContentType:     ApplicationDataRecord,
-		LegacyVersion:   TLS12,
-		Length:          uint16(len(encryptedRecord)),
-		EncryptedRecord: encryptedRecord,
+		contentType:     ApplicationDataRecord,
+		legacyVersion:   TLS12,
+		length:          uint16(len(encryptedRecord)),
+		encryptedRecord: encryptedRecord,
 	}, nil
 }
 
-func (s *Secrets) HandshakeKeys(clientHello []byte, serverHello []byte, keyLength int, ivLength int) ([]byte, []byte, error) {
-	clientHandshakeTrafficSecret, err := DeriveSecret(s.Hash, s.HandshakeSecret, "c hs traffic", [][]byte{clientHello, serverHello})
+func (s *Secrets) trafficKeys(clientHello []byte, serverHello []byte, keyLength int, ivLength int) (*TrafficSecrets, error) {
+	clientHandshakeTrafficSecret, err := DeriveSecret(s.hash, s.handshakeSecret, "c hs traffic", [][]byte{clientHello, serverHello})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	fmt.Printf("Client Handshake Traffic Secret: %x\n", clientHandshakeTrafficSecret)
 
-	serverHandshakeTrafficSecret, err := DeriveSecret(s.Hash, s.HandshakeSecret, "s hs traffic", [][]byte{clientHello, serverHello})
+	serverHandshakeTrafficSecret, err := DeriveSecret(s.hash, s.handshakeSecret, "s hs traffic", [][]byte{clientHello, serverHello})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	fmt.Printf("Server Handshake Traffic Secret: %x\n", serverHandshakeTrafficSecret)
 
-	serverWriteKey, err := HKDFExpandLabel(s.Hash, serverHandshakeTrafficSecret, "key", []byte{}, keyLength)
+	serverWriteKey, err := HKDFExpandLabel(s.hash, serverHandshakeTrafficSecret, "key", []byte{}, keyLength)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	serverWriteIV, err := HKDFExpandLabel(s.Hash, serverHandshakeTrafficSecret, "iv", []byte{}, ivLength)
+	serverWriteIV, err := HKDFExpandLabel(s.hash, serverHandshakeTrafficSecret, "iv", []byte{}, ivLength)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return serverWriteKey, serverWriteIV, nil
+	return &TrafficSecrets{
+		clientHandshakeTrafficSecret:   clientHandshakeTrafficSecret,
+		serverHandshakeTrafficSecret:   serverHandshakeTrafficSecret,
+		clientApplicationTrafficSecret: nil,
+		serverApplicationTrafficSecret: nil,
+		serverWriteKey:                 serverWriteKey,
+		serverWriteIV:                  serverWriteIV,
+	}, nil
 }
 
 func generateSecrets(hash func() hash.Hash, curve ecdh.Curve, clientPublicKeyBytes []byte, serverPrivateKey *ecdh.PrivateKey) (*Secrets, error) {
@@ -694,11 +714,11 @@ func generateSecrets(hash func() hash.Hash, curve ecdh.Curve, clientPublicKeyByt
 	}
 	masterSecret := hkdf.Extract(hash, zero32, secretState)
 	return &Secrets{
-		Hash:            hash,
-		SharedSecret:    sharedSecret,
-		EarlySecret:     earlySecret,
-		HandshakeSecret: handshakeSecret,
-		MasterSecret:    masterSecret,
+		hash:            hash,
+		sharedSecret:    sharedSecret,
+		earlySecret:     earlySecret,
+		handshakeSecret: handshakeSecret,
+		masterSecret:    masterSecret,
 	}, nil
 }
 
@@ -732,18 +752,17 @@ func encryptTLSInnerPlaintext(key, iv []byte, plaintext TLSInnerPlainText, seque
 	return encrypted, nil
 }
 
-func signCertificate(priv *ecdsa.PrivateKey, handshakeContext ...[]byte) ([]byte, error) {
+func signCertificate(priv *ecdsa.PrivateKey, handshakeMessages ...[]byte) ([]byte, error) {
 	signatureTarget := bytes.Repeat([]byte{0x20}, 64)
 	signatureTarget = append(signatureTarget, []byte("TLS 1.3, server CertificateVerify")...)
 	signatureTarget = append(signatureTarget, 0x00) // separator
-	signatureTarget = append(signatureTarget, TranscriptHash(sha256.New, handshakeContext)...)
+	signatureTarget = append(signatureTarget, TranscriptHash(sha256.New, handshakeMessages)...)
 
 	hashed := sha256.Sum256(signatureTarget)
 	signature, err := ecdsa.SignASN1(rand.Reader, priv, hashed[:])
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("length of signature: %d\n", len(signature))
 	return signature, err
 }
 
@@ -756,33 +775,47 @@ func NewServerHello(publicKey *ecdh.PublicKey, namedGroup NamedGroup, cipherSuit
 
 	publicKeyBytes := publicKey.Bytes()
 	keyShareExtension := KeyShareExtension{
-		Length: 2 + 2 + uint16(len(publicKeyBytes)),
-		ClientShares: []KeyShareEntry{
+		length: 2 + 2 + uint16(len(publicKeyBytes)),
+		clientShares: []KeyShareEntry{
 			{
-				Group:           uint16(namedGroup),
-				Length:          uint16(len(publicKeyBytes)),
-				KeyExchangeData: publicKeyBytes,
+				group:           uint16(namedGroup),
+				length:          uint16(len(publicKeyBytes)),
+				keyExchangeData: publicKeyBytes,
 			},
 		},
 	}
 
 	return ServerHelloMessage{
-		LegacyVersion:     TLS12,
-		RandomBytes:       [32]byte(randomData),
-		SessionID:         sessionID,
-		CipherSuite:       cipherSuite,
-		CompressionMethod: 0x00,
-		Extensions: []Extension{
+		legacyVersion:     TLS12,
+		randomBytes:       [32]byte(randomData),
+		sessionID:         sessionID,
+		cipherSuite:       cipherSuite,
+		compressionMethod: 0x00,
+		extensions: []Extension{
 			{
-				Type:   SupportedVersionsExtensionType,
-				Length: 2,
-				Data:   []byte{byte(TLS13 >> 8), byte(TLS13 & 0xff)}, // 0x0304
+				extensionType: SupportedVersionsExtensionType,
+				length:        2,
+				data:          []byte{byte(TLS13 >> 8), byte(TLS13 & 0xff)}, // 0x0304
 			},
 			{
-				Type:   KeyShareExtensionType,
-				Length: keyShareExtension.Length,
-				Data:   keyShareExtension.Bytes(),
+				extensionType: KeyShareExtensionType,
+				length:        keyShareExtension.length,
+				data:          keyShareExtension.Bytes(),
 			},
 		},
+	}, nil
+}
+
+func newFinishedMessage(hash func() hash.Hash, baseKey []byte, handshakeMessages ...[]byte) (FinishedMessage, error) {
+	// Finished message
+	finishedKey, err := HKDFExpandLabel(hash, baseKey, "finished", []byte{}, hash().Size())
+	if err != nil {
+		return FinishedMessage{}, err
+	}
+	fmt.Printf("Finished key: %x\n", finishedKey)
+	h := hmac.New(hash, finishedKey)
+	h.Write(TranscriptHash(hash, handshakeMessages))
+	return FinishedMessage{
+		verifyData: h.Sum(nil),
 	}, nil
 }

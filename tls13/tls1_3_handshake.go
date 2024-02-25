@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"net"
 )
@@ -34,51 +35,63 @@ func Server() {
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 	fmt.Printf("Accepted connection from %s\n\n", conn.RemoteAddr().String())
+	for {
+		handleMessage(conn)
+	}
+}
 
+func handleMessage(conn net.Conn) {
 	// Read TLS record
-	tcpBuffer := make([]byte, 19*1024)
-	n, err := conn.Read(tcpBuffer)
+	tlsHeaderBuffer := make([]byte, 5)
+	_, err := conn.Read(tlsHeaderBuffer)
 	if err != nil {
 		fmt.Printf("Error in reading from connection: %v\n", err)
 		return
 	}
-	if n <= 0 {
-		fmt.Println("Received non-TLS message")
+	length := binary.BigEndian.Uint16(tlsHeaderBuffer[3:5])
+
+	payloadBuffer := make([]byte, length)
+	_, err = io.ReadFull(conn, payloadBuffer)
+	if err != nil {
+		fmt.Printf("Error reading payload from connection: %v\n", err)
+		return
 	}
 
-	length := binary.BigEndian.Uint16(tcpBuffer[3:5])
 	tlsRecord := &TLSPlainText{
-		ContentType:         ContentType(tcpBuffer[0]),
-		LegacyRecordVersion: ProtocolVersion(binary.BigEndian.Uint16(tcpBuffer[1:3])),
-		Length:              length,
-		Fragment:            tcpBuffer[5 : 5+length],
+		contentType:         ContentType(tlsHeaderBuffer[0]),
+		legacyRecordVersion: ProtocolVersion(binary.BigEndian.Uint16(tlsHeaderBuffer[1:3])),
+		length:              length,
+		fragment:            payloadBuffer,
 	}
+	fmt.Printf("TLS Record payload: %x\n", payloadBuffer)
 
-	if tlsRecord.ContentType == HandshakeRecord { // 22 stands for Handshake record type
+	switch tlsRecord.contentType {
+	case HandshakeRecord: // 22 stands for Handshake record type
 		fmt.Println("Received TLS Handshake message")
-		fmt.Printf("Legacy version: %s (%x)\n", ProtocolVersionName[tlsRecord.LegacyRecordVersion], tlsRecord.LegacyRecordVersion)
-		fmt.Printf("Record length: %d bytes\n", tlsRecord.Length)
+		fmt.Printf("Legacy version: %s (%x)\n", ProtocolVersionName[tlsRecord.legacyRecordVersion], tlsRecord.legacyRecordVersion)
+		fmt.Printf("Record length: %d bytes\n", tlsRecord.length)
 
-		msgType := HandshakeType(tlsRecord.Fragment[0])
+		msgType := HandshakeType(tlsRecord.fragment[0])
 		// extract 3 bytes
-		handshakeLength := (uint32(tlsRecord.Fragment[1]) << 16) | (uint32(tlsRecord.Fragment[2]) << 8) | uint32(tlsRecord.Fragment[3])
+		handshakeLength := (uint32(tlsRecord.fragment[1]) << 16) | (uint32(tlsRecord.fragment[2]) << 8) | uint32(tlsRecord.fragment[3])
 		fmt.Println(fmt.Sprintf("Handshake msg_type: %d\n", msgType))
-		if msgType == ClientHello { // 0x01
+		switch msgType {
+		case ClientHello: // 0x01
 			fmt.Println("Received ClientHello message")
 			fmt.Println("Handshake: ClientHello")
 			fmt.Printf("Handshake message length: %d bytes\n", handshakeLength)
 			fmt.Println()
-			clientHello := NewClientHello(tlsRecord.Fragment[4 : 4+handshakeLength])
-			fmt.Printf("Legacy version: %s (%x)\n", ProtocolVersionName[clientHello.LegacyVersion], clientHello.LegacyVersion)
-			fmt.Printf("Random: %x\n", clientHello.Random)
-			fmt.Printf("LegacySessionIDLength: %d\n", len(clientHello.LegacySessionID))
-			fmt.Printf("LegacySessionID: %x\n", clientHello.LegacySessionID)
+			clientHello := NewClientHello(tlsRecord.fragment[4 : 4+handshakeLength])
+			fmt.Printf("Legacy version: %s (%x)\n", ProtocolVersionName[clientHello.legacyVersion], clientHello.legacyVersion)
+			fmt.Printf("Random: %x\n", clientHello.random)
+			fmt.Printf("LegacySessionIDLength: %d\n", len(clientHello.legacySessionID))
+			fmt.Printf("LegacySessionID: %x\n", clientHello.legacySessionID)
 			fmt.Println("CipherSuites")
-			for _, cipherSuite := range clientHello.CipherSuites {
+			for _, cipherSuite := range clientHello.cipherSuites {
 				fmt.Printf("  CipherSuite: %s (%x)\n", CipherSuiteName[cipherSuite], cipherSuite)
 			}
-			fmt.Printf("LegacyCompressionMethodLength: %d\n", len(clientHello.LegacyCompressionMethod))
-			fmt.Printf("LegacyCompressionMethod: %x\n\n", clientHello.LegacyCompressionMethod)
+			fmt.Printf("LegacyCompressionMethodLength: %d\n", len(clientHello.legacyCompressionMethod))
+			fmt.Printf("LegacyCompressionMethod: %x\n\n", clientHello.legacyCompressionMethod)
 
 			fmt.Println("Extensions")
 			extensions := clientHello.parseExtensions()
@@ -90,65 +103,64 @@ func handleConnection(conn net.Conn) {
 				fmt.Println("Error in calculating ECDH private key")
 				return
 			}
-			serverHello, err := NewServerHello(ecdhServerPrivateKey.PublicKey(), secp256r1, TLS_AES_128_GCM_SHA256, clientHello.LegacySessionID)
+			fmt.Printf("ECDH Server Private key:%x\n", ecdhServerPrivateKey.Bytes())
+			fmt.Printf("ECDH Server Public key:%x\n", ecdhServerPrivateKey.PublicKey().Bytes())
+			serverHello, err := NewServerHello(ecdhServerPrivateKey.PublicKey(), secp256r1, TLS_AES_128_GCM_SHA256, clientHello.legacySessionID)
 			if err != nil {
 				fmt.Println("Error constructing ServerHello message:", err)
 				return
 			}
-			fmt.Printf("ECDH Server Private key:%x\n", ecdhServerPrivateKey.Bytes())
-			fmt.Printf("ECDH Server Public key:%x\n", ecdhServerPrivateKey.PublicKey().Bytes())
-			serverHelloHandshake := Handshake[ServerHelloMessage]{
-				MsgType:          ServerHello,
-				Length:           uint32(len(serverHello.Bytes())),
-				HandshakeMessage: serverHello,
+			handshakeServerHello := Handshake[ServerHelloMessage]{
+				msgType:          ServerHello,
+				length:           uint32(len(serverHello.Bytes())),
+				handshakeMessage: serverHello,
 			}
-
 			serverHelloTLSRecord := TLSPlainText{
-				ContentType:         HandshakeRecord, // 0x16
-				LegacyRecordVersion: TLS12,           // 0x0303
-				Length:              uint16(len(serverHelloHandshake.Bytes())),
-				Fragment:            serverHelloHandshake.Bytes(),
+				contentType:         HandshakeRecord, // 0x16
+				legacyRecordVersion: TLS12,           // 0x0303
+				length:              uint16(len(handshakeServerHello.Bytes())),
+				fragment:            handshakeServerHello.Bytes(),
 			}
 			fmt.Printf("ServerHello: %x\n\n", serverHelloTLSRecord.Bytes())
 			conn.Write(serverHelloTLSRecord.Bytes())
 
-			// ChangeCipherSpec message, is this necessary?
-			conn.Write(TLSPlainText{
-				ContentType:         ChangeCipherSpecRecord, // 0x14
-				LegacyRecordVersion: TLS12,                  // 0x0303
-				Length:              1,
-				Fragment:            []byte{1},
-			}.Bytes())
+			// // ChangeCipherSpec message, is this necessary?
+			// conn.Write(TLSPlainText{
+			// 	contentType:         ChangeCipherSpecRecord, // 0x14
+			// 	legacyRecordVersion: TLS12,                  // 0x0303
+			// 	length:              1,
+			// 	fragment:            []byte{1},
+			// }.Bytes())
 
 			keyShareExtension := extensions[KeyShareExtensionType].(KeyShareExtension)
-			clientECDHPublicKey := keyShareExtension.ClientShares[0].KeyExchangeData
+			clientECDHPublicKey := keyShareExtension.clientShares[0].keyExchangeData
 			secrets, err := generateSecrets(sha256.New, ecdh.P256(), clientECDHPublicKey, ecdhServerPrivateKey)
 			if err != nil {
 				fmt.Println("Error generating secrets:", err)
 				return
 			}
-			fmt.Printf("Shared secret(pre-master secret): %x\n", secrets.SharedSecret)
-			fmt.Printf("Early Secret: %x\n", secrets.EarlySecret)
-			fmt.Printf("Handshake Secret: %x\n", secrets.HandshakeSecret)
-			serverWriteKey, serverWriteIV, err := secrets.HandshakeKeys(tlsRecord.Fragment, serverHelloTLSRecord.Fragment, 16, 12)
+			fmt.Printf("Shared secret(pre-master secret): %x\n", secrets.sharedSecret)
+			fmt.Printf("Early Secret: %x\n", secrets.earlySecret)
+			fmt.Printf("Handshake Secret: %x\n", secrets.handshakeSecret)
+			trafficSecrets, err := secrets.trafficKeys(tlsRecord.fragment, serverHelloTLSRecord.fragment, 16, 12)
 			if err != nil {
 				fmt.Println("Error in deriving handshake keys:", err)
 			}
-			fmt.Printf("Server write key: %x\n", serverWriteKey)
-			fmt.Printf("Server IV: %x\n\n", serverWriteIV)
+			fmt.Printf("Server write key: %x\n", trafficSecrets.serverWriteKey)
+			fmt.Printf("Server IV: %x\n\n", trafficSecrets.serverWriteIV)
 
 			// EncryptedExtensions message
 			encryptedExtensions := EncryptedExtensionsMessage{
-				Extensions: []Extension{},
+				extensions: []Extension{},
 			}
-			encryptedExtensionsHandshakeMessage := Handshake[EncryptedExtensionsMessage]{
-				MsgType:          EncryptedExtensions,
-				Length:           uint32(len(encryptedExtensions.Bytes())),
-				HandshakeMessage: encryptedExtensions,
+			handshakeEncryptedExtensions := Handshake[EncryptedExtensionsMessage]{
+				msgType:          EncryptedExtensions,
+				length:           uint32(len(encryptedExtensions.Bytes())),
+				handshakeMessage: encryptedExtensions,
 			}
-			encryptedExtensionsTLSRecord, err := NewTLSCipherMessageText(serverWriteKey, serverWriteIV, TLSInnerPlainText{
-				Content:     encryptedExtensionsHandshakeMessage.Bytes(),
-				ContentType: HandshakeRecord,
+			encryptedExtensionsTLSRecord, err := NewTLSCipherMessageText(trafficSecrets, TLSInnerPlainText{
+				content:     handshakeEncryptedExtensions.Bytes(),
+				contentType: HandshakeRecord,
 			}, 0)
 			fmt.Printf("Encrypted EncryptedExtensions TLS Record: %x\n\n", encryptedExtensionsTLSRecord.Bytes())
 			conn.Write(encryptedExtensionsTLSRecord.Bytes())
@@ -159,25 +171,25 @@ func handleConnection(conn net.Conn) {
 				fmt.Println("Error in loading server certificate:", err)
 				return
 			}
-			certificateMessage := CertificateMessage{
-				CertificateRequestContext: []byte{},
-				CertificateList: []CertificateEntry{
+			certificate := CertificateMessage{
+				certificateRequestContext: []byte{},
+				certificateList: []CertificateEntry{
 					{
-						CertType: X509,
-						CertData: serverCert.Certificate[0],
+						certType: X509,
+						certData: serverCert.Certificate[0],
 					},
 				},
 			}
-			certificateMessageHandshakeMessage := Handshake[CertificateMessage]{
-				MsgType:          Certificate,
-				Length:           uint32(len(certificateMessage.Bytes())),
-				HandshakeMessage: certificateMessage,
+			handshakeCertificate := Handshake[CertificateMessage]{
+				msgType:          Certificate,
+				length:           uint32(len(certificate.Bytes())),
+				handshakeMessage: certificate,
 			}
-			fmt.Printf("Certificate: %x\n", certificateMessage.Bytes())
-			fmt.Printf("Certificate Length: %d\n\n", len(certificateMessage.Bytes()))
-			certificateTLSRecord, err := NewTLSCipherMessageText(serverWriteKey, serverWriteIV, TLSInnerPlainText{
-				Content:     certificateMessageHandshakeMessage.Bytes(),
-				ContentType: HandshakeRecord,
+			fmt.Printf("Certificate: %x\n", certificate.Bytes())
+			fmt.Printf("Certificate Length: %d\n\n", len(certificate.Bytes()))
+			certificateTLSRecord, err := NewTLSCipherMessageText(trafficSecrets, TLSInnerPlainText{
+				content:     handshakeCertificate.Bytes(),
+				contentType: HandshakeRecord,
 			}, 1)
 			if err != nil {
 				fmt.Println("Error in encrypting Certificate message:", err)
@@ -194,28 +206,29 @@ func handleConnection(conn net.Conn) {
 			}
 			signature, err := signCertificate(
 				serverPriv,
-				tlsRecord.Fragment,                          // ClientHello
-				serverHelloTLSRecord.Fragment,               // ServerHello
-				encryptedExtensionsHandshakeMessage.Bytes(), // EncryptedExtensions
-				certificateMessageHandshakeMessage.Bytes(),  // Certificate
+				tlsRecord.fragment,                   // ClientHello
+				serverHelloTLSRecord.fragment,        // ServerHello
+				handshakeEncryptedExtensions.Bytes(), // EncryptedExtensions
+				handshakeCertificate.Bytes(),         // Certificate
 			)
 			if err != nil {
 				fmt.Println("Error in signing certificate:", err)
 				return
 			}
+			fmt.Printf("length of signature: %d\n", len(signature))
 			fmt.Printf("Signature: %x\n", signature)
 			certificateVerifyMessage := CertificateVerifyMessage{
 				algorithm: ecdsa_secp256r1_sha256,
 				signature: signature,
 			}
-
-			certificateVerifyTLSRecord, err := NewTLSCipherMessageText(serverWriteKey, serverWriteIV, TLSInnerPlainText{
-				Content: Handshake[CertificateVerifyMessage]{
-					MsgType:          CertificateVerify,
-					Length:           uint32(len(certificateVerifyMessage.Bytes())),
-					HandshakeMessage: certificateVerifyMessage,
-				}.Bytes(),
-				ContentType: HandshakeRecord,
+			handshakeCertificateVerify := Handshake[CertificateVerifyMessage]{
+				msgType:          CertificateVerify,
+				length:           uint32(len(certificateVerifyMessage.Bytes())),
+				handshakeMessage: certificateVerifyMessage,
+			}
+			certificateVerifyTLSRecord, err := NewTLSCipherMessageText(trafficSecrets, TLSInnerPlainText{
+				content:     handshakeCertificateVerify.Bytes(),
+				contentType: HandshakeRecord,
 			}, 2)
 			if err != nil {
 				fmt.Println("Error in encrypting CertificateVerify message:", err)
@@ -224,11 +237,43 @@ func handleConnection(conn net.Conn) {
 			fmt.Printf("CertificateVerify TLS Record: %x\n\n", certificateVerifyTLSRecord.Bytes())
 			conn.Write(certificateVerifyTLSRecord.Bytes())
 
-			// TODO: implement Finished message
+			// Finished message
+			finishedMessage, err := newFinishedMessage(
+				sha256.New,
+				trafficSecrets.serverHandshakeTrafficSecret,
+				tlsRecord.fragment,                   // ClientHello
+				serverHelloTLSRecord.fragment,        // ServerHello
+				handshakeEncryptedExtensions.Bytes(), // EncryptedExtensions
+				handshakeCertificate.Bytes(),         // Certificate
+				handshakeCertificateVerify.Bytes(),   // CertificateVerify
+			)
+			if err != nil {
+				fmt.Println("Error in generating finished key:", err)
+				return
+			}
+			finishedTLSRecord, err := NewTLSCipherMessageText(trafficSecrets, TLSInnerPlainText{
+				content: Handshake[FinishedMessage]{
+					msgType:          Finished,
+					length:           uint32(len(finishedMessage.Bytes())),
+					handshakeMessage: finishedMessage,
+				}.Bytes(),
+				contentType: HandshakeRecord,
+			}, 3)
+			if err != nil {
+				fmt.Println("Error in encrypting Finished message:", err)
+				return
+			}
+			fmt.Printf("Finished TLS Record: %x\n\n", finishedTLSRecord.Bytes())
+			conn.Write(finishedTLSRecord.Bytes())
 		}
-
+	case ChangeCipherSpecRecord:
+		fmt.Printf("Received TLS ChangeCipherSpec message. Ignored.\n\n")
+	case ApplicationDataRecord: // 23 stands for ApplicationData record type
+		fmt.Println("Received TLS ApplicationData message")
 		// fmt.Printf("ServerHello: %x\n", handshakeResponse.Bytes())
 		// conn.Write(handshakeResponse.Bytes())
+	default:
+		fmt.Println("Received some message")
 	}
 
 	// response := "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
