@@ -21,11 +21,13 @@ type (
 		Bytes() []byte
 	}
 
-	ContentType     uint8 // Record protocol
-	ProtocolVersion uint16
-	HandshakeType   uint8
-	ExtensionType   uint16
-	CertificateType uint8
+	ContentType      uint8 // Record protocol
+	ProtocolVersion  uint16
+	HandshakeType    uint8
+	ExtensionType    uint16
+	CertificateType  uint8
+	AlertLevel       uint8
+	AlertDescription uint8
 
 	CipherSuite        uint16
 	NamedGroup         uint16
@@ -51,6 +53,13 @@ type (
 		msgType          HandshakeType
 		length           uint32
 		handshakeMessage T
+	}
+	ApplicationData struct {
+		data []byte
+	}
+	Alert struct {
+		level       AlertLevel
+		description AlertDescription
 	}
 
 	// HandshakeEncoder
@@ -149,6 +158,15 @@ type (
 		serverWriteIV                  []byte
 		clientWriteKey                 []byte
 		clientWriteIV                  []byte
+	}
+
+	ApplicationTrafficSecrets struct {
+		clientApplicationTrafficSecret []byte
+		serverApplicationTrafficSecret []byte
+		clientWriteKey                 []byte
+		clientWriteIV                  []byte
+		serverWriteKey                 []byte
+		serverWriteIV                  []byte
 	}
 
 	CertificateEntry struct {
@@ -250,6 +268,38 @@ const (
 	// PSKKeyExchangeMode
 	psk_ke     PSKKeyExchangeMode = 0
 	psk_dhe_ke PSKKeyExchangeMode = 1
+
+	warning AlertLevel = 1
+	fatal   AlertLevel = 2
+
+	close_notify                    AlertDescription = 0
+	unexpected_message              AlertDescription = 10
+	bad_record_mac                  AlertDescription = 20
+	decryption_failed               AlertDescription = 21
+	record_overflow                 AlertDescription = 22
+	handshake_failure               AlertDescription = 40
+	bad_certificate                 AlertDescription = 42
+	unsupported_certificate         AlertDescription = 43
+	certificate_revoked             AlertDescription = 44
+	certificate_expired             AlertDescription = 45
+	certificate_unknown             AlertDescription = 46
+	illegal_parameter               AlertDescription = 47
+	unknown_ca                      AlertDescription = 48
+	access_denied                   AlertDescription = 49
+	decode_error                    AlertDescription = 50
+	decrypt_error                   AlertDescription = 51
+	export_restriction              AlertDescription = 60
+	protocol_version                AlertDescription = 70
+	insufficient_security           AlertDescription = 71
+	internal_error                  AlertDescription = 80
+	user_canceled                   AlertDescription = 90
+	no_renegotiation                AlertDescription = 100
+	unsupported_extension           AlertDescription = 110
+	unrecognized_name               AlertDescription = 112
+	bad_certificate_status_response AlertDescription = 113
+	unknown_psk_identity            AlertDescription = 115
+	certificate_required            AlertDescription = 116
+	no_application_protocol         AlertDescription = 120
 )
 
 // https://tex2e.github.io/rfc-translater/html/rfc8422.html#6--Cipher-Suites
@@ -476,6 +526,10 @@ func (f FinishedMessage) Bytes() []byte {
 	return f.verifyData
 }
 
+func (a Alert) Bytes() []byte {
+	return []byte{byte(a.level), byte(a.description)}
+}
+
 func NewClientHello(clientHelloBuffer []byte) ClientHelloMessage {
 	legacyVersion := ProtocolVersion(binary.BigEndian.Uint16(clientHelloBuffer[0:2])) // 2 bytes
 	random := clientHelloBuffer[2:34]                                                 // 32 bytes
@@ -626,8 +680,8 @@ func (ch ClientHelloMessage) parseExtensions() map[ExtensionType]interface{} {
 	return extensionMap
 }
 
-func NewTLSCipherMessageText(trafficSecrets *TrafficSecrets, plaintext TLSInnerPlainText, sequenceNumber uint64) (*TLSRecord, error) {
-	encryptedRecord, err := encryptTLSInnerPlaintext(trafficSecrets.serverWriteKey, trafficSecrets.serverWriteIV, plaintext.Bytes(), sequenceNumber)
+func NewTLSCipherMessageText(key, iv []byte, plaintext TLSInnerPlainText, sequenceNumber uint64) (*TLSRecord, error) {
+	encryptedRecord, err := encryptTLSInnerPlaintext(key, iv, plaintext.Bytes(), sequenceNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -649,7 +703,7 @@ func (t TLSRecord) Bytes() []byte {
 	}, t.fragment...)
 }
 
-func (s *Secrets) trafficKeys(clientHello []byte, serverHello []byte, keyLength int, ivLength int) (*TrafficSecrets, error) {
+func (s *Secrets) handshakeTrafficKeys(clientHello []byte, serverHello []byte, keyLength int, ivLength int) (*TrafficSecrets, error) {
 	clientHandshakeTrafficSecret, err := DeriveSecret(s.hash, s.handshakeSecret, "c hs traffic", [][]byte{clientHello, serverHello})
 	if err != nil {
 		return nil, err
@@ -687,6 +741,55 @@ func (s *Secrets) trafficKeys(clientHello []byte, serverHello []byte, keyLength 
 		serverWriteIV:                  serverWriteIV,
 		clientWriteKey:                 clientWriteKey,
 		clientWriteIV:                  clientWriteIV,
+	}, nil
+}
+
+func (s *Secrets) applicationTrafficKeys(
+	clientHello []byte,
+	serverHello []byte,
+	encryptedExtensions []byte,
+	certificate []byte,
+	certificateVerify []byte,
+	serverFinished []byte,
+	keyLength int,
+	ivLength int,
+) (*ApplicationTrafficSecrets, error) {
+	messages := [][]byte{clientHello, serverHello, encryptedExtensions, certificate, certificateVerify, serverFinished}
+	clientApplicationTrafficSecret, err := DeriveSecret(s.hash, s.masterSecret, "c ap traffic", messages)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("Client Application Traffic Secret: %x\n", clientApplicationTrafficSecret)
+
+	serverApplicationTrafficSecret, err := DeriveSecret(s.hash, s.masterSecret, "s ap traffic", messages)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("Server Application Traffic Secret: %x\n", serverApplicationTrafficSecret)
+
+	serverWriteKey, err := HKDFExpandLabel(s.hash, serverApplicationTrafficSecret, "key", []byte{}, keyLength)
+	if err != nil {
+		return nil, err
+	}
+	serverWriteIV, err := HKDFExpandLabel(s.hash, serverApplicationTrafficSecret, "iv", []byte{}, ivLength)
+	if err != nil {
+		return nil, err
+	}
+	clientWriteKey, err := HKDFExpandLabel(s.hash, clientApplicationTrafficSecret, "key", []byte{}, keyLength)
+	if err != nil {
+		return nil, err
+	}
+	clientWriteIV, err := HKDFExpandLabel(s.hash, clientApplicationTrafficSecret, "iv", []byte{}, ivLength)
+	if err != nil {
+		return nil, err
+	}
+	return &ApplicationTrafficSecrets{
+		clientApplicationTrafficSecret: clientApplicationTrafficSecret,
+		serverApplicationTrafficSecret: serverApplicationTrafficSecret,
+		clientWriteKey:                 clientWriteKey,
+		clientWriteIV:                  clientWriteIV,
+		serverWriteKey:                 serverWriteKey,
+		serverWriteIV:                  serverWriteIV,
 	}, nil
 }
 
@@ -756,8 +859,8 @@ func encryptTLSInnerPlaintext(key, iv []byte, tlsInnerPlainText []byte, sequence
 	return encrypted, nil
 }
 
-func decryptTLSInnerPlaintext(ts TrafficSecrets, encryptedTLSInnerPlainText []byte, sequenceNumber uint64, tlsHeader []byte) ([]byte, error) {
-	block, err := aes.NewCipher(ts.clientWriteKey)
+func decryptTLSInnerPlaintext(key, iv []byte, encryptedTLSInnerPlainText []byte, sequenceNumber uint64, tlsHeader []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
@@ -765,7 +868,7 @@ func decryptTLSInnerPlaintext(ts TrafficSecrets, encryptedTLSInnerPlainText []by
 	if err != nil {
 		return nil, err
 	}
-	return aesgcm.Open(nil, calculateNonce(ts.clientWriteIV, sequenceNumber), encryptedTLSInnerPlainText, tlsHeader)
+	return aesgcm.Open(nil, calculateNonce(iv, sequenceNumber), encryptedTLSInnerPlainText, tlsHeader)
 }
 
 func signCertificate(priv *ecdsa.PrivateKey, handshakeMessages ...[]byte) ([]byte, error) {
