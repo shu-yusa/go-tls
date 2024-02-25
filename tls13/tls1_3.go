@@ -32,8 +32,8 @@ type (
 	SignatureScheme    uint16
 	PSKKeyExchangeMode uint8
 
-	// TLS Record before encryption
-	TLSPlainText struct {
+	// Either of TLSPlainText or TLSCipherMessageText
+	TLSRecord struct {
 		contentType         ContentType
 		legacyRecordVersion ProtocolVersion
 		length              uint16
@@ -45,13 +45,6 @@ type (
 		content     []byte
 		contentType ContentType // real content type
 		zeros       []byte      // padding
-	}
-
-	TLSCipherMessageText struct {
-		contentType     ContentType
-		legacyVersion   ProtocolVersion
-		length          uint16
-		encryptedRecord []byte // Encrypted TLSInnerPlainText
 	}
 
 	Handshake[T HandshakeEncoder] struct {
@@ -154,6 +147,8 @@ type (
 		serverApplicationTrafficSecret []byte
 		serverWriteKey                 []byte
 		serverWriteIV                  []byte
+		clientWriteKey                 []byte
+		clientWriteIV                  []byte
 	}
 
 	CertificateEntry struct {
@@ -269,6 +264,14 @@ var ProtocolVersionName = map[ProtocolVersion]string{
 	TLS13: "TLS 1.3",
 }
 
+var ContentTypeName = map[ContentType]string{
+	InvalidRecord:          "Invalid Record",
+	ChangeCipherSpecRecord: "Change Cipher Spec",
+	AlertRecord:            "Alert",
+	HandshakeRecord:        "Handshake",
+	ApplicationDataRecord:  "Application Data",
+}
+
 var CipherSuiteName = map[CipherSuite]string{
 	TLS_AES_128_GCM_SHA256:                        "TLS_AES_128_GCM_SHA256",
 	TLS_AES_256_GCM_SHA384:                        "TLS_AES_256_GCM_SHA384",
@@ -352,28 +355,8 @@ var SignatureAlgorithmName = map[SignatureScheme]string{
 	rsa_pkcs1_sha512:                  "rsa_pkcs1_sha512",
 }
 
-func (t TLSPlainText) Bytes() []byte {
-	return append([]byte{
-		byte(uint8(t.contentType)),
-		byte(uint8(t.legacyRecordVersion >> 8)),
-		byte(uint8(t.legacyRecordVersion)),
-		byte(uint8(t.length >> 8)),
-		byte(uint8(t.length)),
-	}, t.fragment...)
-}
-
 func (t TLSInnerPlainText) Bytes() []byte {
 	return append(append(t.content, byte(t.contentType)), t.zeros...)
-}
-
-func (t TLSCipherMessageText) Bytes() []byte {
-	return append([]byte{
-		byte(uint8(t.contentType)),
-		byte(uint8(t.legacyVersion >> 8)),
-		byte(uint8(t.legacyVersion)),
-		byte(uint8(t.length >> 8)),
-		byte(uint8(t.length)),
-	}, t.encryptedRecord...)
 }
 
 func (hs Handshake[T]) Bytes() []byte {
@@ -643,17 +626,27 @@ func (ch ClientHelloMessage) parseExtensions() map[ExtensionType]interface{} {
 	return extensionMap
 }
 
-func NewTLSCipherMessageText(trafficSecrets *TrafficSecrets, plaintext TLSInnerPlainText, sequenceNumber uint64) (*TLSCipherMessageText, error) {
-	encryptedRecord, err := encryptTLSInnerPlaintext(trafficSecrets.serverWriteKey, trafficSecrets.serverWriteIV, plaintext, sequenceNumber)
+func NewTLSCipherMessageText(trafficSecrets *TrafficSecrets, plaintext TLSInnerPlainText, sequenceNumber uint64) (*TLSRecord, error) {
+	encryptedRecord, err := encryptTLSInnerPlaintext(trafficSecrets.serverWriteKey, trafficSecrets.serverWriteIV, plaintext.Bytes(), sequenceNumber)
 	if err != nil {
 		return nil, err
 	}
-	return &TLSCipherMessageText{
-		contentType:     ApplicationDataRecord,
-		legacyVersion:   TLS12,
-		length:          uint16(len(encryptedRecord)),
-		encryptedRecord: encryptedRecord,
+	return &TLSRecord{
+		contentType:         ApplicationDataRecord,
+		legacyRecordVersion: TLS12,
+		length:              uint16(len(encryptedRecord)),
+		fragment:            encryptedRecord,
 	}, nil
+}
+
+func (t TLSRecord) Bytes() []byte {
+	return append([]byte{
+		byte(uint8(t.contentType)),
+		byte(uint8(t.legacyRecordVersion >> 8)),
+		byte(uint8(t.legacyRecordVersion)),
+		byte(uint8(t.length >> 8)),
+		byte(uint8(t.length)),
+	}, t.fragment...)
 }
 
 func (s *Secrets) trafficKeys(clientHello []byte, serverHello []byte, keyLength int, ivLength int) (*TrafficSecrets, error) {
@@ -677,6 +670,14 @@ func (s *Secrets) trafficKeys(clientHello []byte, serverHello []byte, keyLength 
 	if err != nil {
 		return nil, err
 	}
+	clientWriteKey, err := HKDFExpandLabel(s.hash, clientHandshakeTrafficSecret, "key", []byte{}, keyLength)
+	if err != nil {
+		return nil, err
+	}
+	clientWriteIV, err := HKDFExpandLabel(s.hash, clientHandshakeTrafficSecret, "iv", []byte{}, ivLength)
+	if err != nil {
+		return nil, err
+	}
 	return &TrafficSecrets{
 		clientHandshakeTrafficSecret:   clientHandshakeTrafficSecret,
 		serverHandshakeTrafficSecret:   serverHandshakeTrafficSecret,
@@ -684,6 +685,8 @@ func (s *Secrets) trafficKeys(clientHello []byte, serverHello []byte, keyLength 
 		serverApplicationTrafficSecret: nil,
 		serverWriteKey:                 serverWriteKey,
 		serverWriteIV:                  serverWriteIV,
+		clientWriteKey:                 clientWriteKey,
+		clientWriteIV:                  clientWriteIV,
 	}, nil
 }
 
@@ -722,7 +725,19 @@ func generateSecrets(hash func() hash.Hash, curve ecdh.Curve, clientPublicKeyByt
 	}, nil
 }
 
-func encryptTLSInnerPlaintext(key, iv []byte, plaintext TLSInnerPlainText, sequenceNumber uint64) ([]byte, error) {
+func calculateNonce(iv []byte, sequenceNumber uint64) []byte {
+	sequenceNumberBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(sequenceNumberBytes, sequenceNumber)
+	paddedSequenceNumber := make([]byte, len(iv))
+	copy(paddedSequenceNumber[len(iv)-8:], sequenceNumberBytes)
+	nonce := make([]byte, len(iv))
+	for i := range iv {
+		nonce[i] = paddedSequenceNumber[i] ^ iv[i]
+	}
+	return nonce
+}
+
+func encryptTLSInnerPlaintext(key, iv []byte, tlsInnerPlainText []byte, sequenceNumber uint64) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -731,25 +746,26 @@ func encryptTLSInnerPlaintext(key, iv []byte, plaintext TLSInnerPlainText, seque
 	if err != nil {
 		return nil, err
 	}
-	// Nonce calculation
-	sequenceNumberBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(sequenceNumberBytes, sequenceNumber)
-
-	paddedSequenceNumber := make([]byte, len(iv))
-	copy(paddedSequenceNumber[len(iv)-8:], sequenceNumberBytes)
-	nonce := make([]byte, len(iv))
-	for i := range iv {
-		nonce[i] = paddedSequenceNumber[i] ^ iv[i]
-	}
 	// TLS Record header is used as an AEAD
-	plaintextBytes := plaintext.Bytes()
-	tlsCipherTextLength := len(plaintextBytes) + aesgcm.Overhead()
-	encrypted := aesgcm.Seal(nil, nonce, plaintextBytes, []byte{
+	tlsCipherTextLength := len(tlsInnerPlainText) + aesgcm.Overhead()
+	encrypted := aesgcm.Seal(nil, calculateNonce(iv, sequenceNumber), tlsInnerPlainText, []byte{
 		byte(ApplicationDataRecord),          // 0x17
 		byte(TLS12 >> 8), byte(TLS12 & 0xff), // 0x0303
 		byte(tlsCipherTextLength >> 8), byte(tlsCipherTextLength),
 	})
 	return encrypted, nil
+}
+
+func decryptTLSInnerPlaintext(ts TrafficSecrets, encryptedTLSInnerPlainText []byte, sequenceNumber uint64, tlsHeader []byte) ([]byte, error) {
+	block, err := aes.NewCipher(ts.clientWriteKey)
+	if err != nil {
+		return nil, err
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	return aesgcm.Open(nil, calculateNonce(ts.clientWriteIV, sequenceNumber), encryptedTLSInnerPlainText, tlsHeader)
 }
 
 func signCertificate(priv *ecdsa.PrivateKey, handshakeMessages ...[]byte) ([]byte, error) {
@@ -807,12 +823,10 @@ func NewServerHello(publicKey *ecdh.PublicKey, namedGroup NamedGroup, cipherSuit
 }
 
 func newFinishedMessage(hash func() hash.Hash, baseKey []byte, handshakeMessages ...[]byte) (FinishedMessage, error) {
-	// Finished message
 	finishedKey, err := HKDFExpandLabel(hash, baseKey, "finished", []byte{}, hash().Size())
 	if err != nil {
 		return FinishedMessage{}, err
 	}
-	fmt.Printf("Finished key: %x\n", finishedKey)
 	h := hmac.New(hash, finishedKey)
 	h.Write(TranscriptHash(hash, handshakeMessages))
 	return FinishedMessage{

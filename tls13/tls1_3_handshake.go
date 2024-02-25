@@ -1,6 +1,7 @@
 package tls13
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/rand"
@@ -13,6 +14,18 @@ import (
 	"net"
 )
 
+type (
+	tlsContext struct {
+		trafficSecrets               TrafficSecrets
+		handshakeClientHello         []byte
+		handshakeServerHello         []byte
+		handshakeEncryptedExtensions []byte
+		handshakeCertificate         []byte
+		handshakeCertificateVerify   []byte
+		serverFinished               []byte
+	}
+)
+
 func Server() {
 	listener, err := net.Listen("tcp", ":443")
 	if err != nil {
@@ -23,24 +36,23 @@ func Server() {
 
 	for {
 		conn, err := listener.Accept()
+		fmt.Printf("Accepted connection from %s\n\n", conn.RemoteAddr().String())
 		if err != nil {
 			log.Printf("Failed to accept connection: %v", err)
 			continue
 		}
 
-		go handleConnection(conn)
+		go func(conn net.Conn) {
+			defer conn.Close()
+			tlsContext := &tlsContext{}
+			for {
+				handleMessage(conn, tlsContext)
+			}
+		}(conn)
 	}
 }
 
-func handleConnection(conn net.Conn) {
-	defer conn.Close()
-	fmt.Printf("Accepted connection from %s\n\n", conn.RemoteAddr().String())
-	for {
-		handleMessage(conn)
-	}
-}
-
-func handleMessage(conn net.Conn) {
+func handleMessage(conn net.Conn, tlsContext *tlsContext) {
 	// Read TLS record
 	tlsHeaderBuffer := make([]byte, 5)
 	_, err := conn.Read(tlsHeaderBuffer)
@@ -57,7 +69,7 @@ func handleMessage(conn net.Conn) {
 		return
 	}
 
-	tlsRecord := &TLSPlainText{
+	tlsRecord := &TLSRecord{
 		contentType:         ContentType(tlsHeaderBuffer[0]),
 		legacyRecordVersion: ProtocolVersion(binary.BigEndian.Uint16(tlsHeaderBuffer[1:3])),
 		length:              length,
@@ -115,7 +127,7 @@ func handleMessage(conn net.Conn) {
 				length:           uint32(len(serverHello.Bytes())),
 				handshakeMessage: serverHello,
 			}
-			serverHelloTLSRecord := TLSPlainText{
+			serverHelloTLSRecord := TLSRecord{
 				contentType:         HandshakeRecord, // 0x16
 				legacyRecordVersion: TLS12,           // 0x0303
 				length:              uint16(len(handshakeServerHello.Bytes())),
@@ -247,16 +259,17 @@ func handleMessage(conn net.Conn) {
 				handshakeCertificate.Bytes(),         // Certificate
 				handshakeCertificateVerify.Bytes(),   // CertificateVerify
 			)
+			handshakeFinished := Handshake[FinishedMessage]{
+				msgType:          Finished,
+				length:           uint32(len(finishedMessage.Bytes())),
+				handshakeMessage: finishedMessage,
+			}
 			if err != nil {
 				fmt.Println("Error in generating finished key:", err)
 				return
 			}
 			finishedTLSRecord, err := NewTLSCipherMessageText(trafficSecrets, TLSInnerPlainText{
-				content: Handshake[FinishedMessage]{
-					msgType:          Finished,
-					length:           uint32(len(finishedMessage.Bytes())),
-					handshakeMessage: finishedMessage,
-				}.Bytes(),
+				content:     handshakeFinished.Bytes(),
 				contentType: HandshakeRecord,
 			}, 3)
 			if err != nil {
@@ -265,11 +278,78 @@ func handleMessage(conn net.Conn) {
 			}
 			fmt.Printf("Finished TLS Record: %x\n\n", finishedTLSRecord.Bytes())
 			conn.Write(finishedTLSRecord.Bytes())
+
+			// Store traffic secrets
+			tlsContext.trafficSecrets = *trafficSecrets
+			tlsContext.handshakeClientHello = tlsRecord.fragment
+			tlsContext.handshakeServerHello = serverHelloTLSRecord.fragment
+			tlsContext.handshakeEncryptedExtensions = handshakeEncryptedExtensions.Bytes()
+			tlsContext.handshakeCertificate = handshakeCertificate.Bytes()
+			tlsContext.handshakeCertificateVerify = handshakeCertificateVerify.Bytes()
+			tlsContext.serverFinished = handshakeFinished.Bytes()
 		}
 	case ChangeCipherSpecRecord:
 		fmt.Printf("Received TLS ChangeCipherSpec message. Ignored.\n\n")
 	case ApplicationDataRecord: // 23 stands for ApplicationData record type
 		fmt.Println("Received TLS ApplicationData message")
+		decrypedRecord, err := decryptTLSInnerPlaintext(tlsContext.trafficSecrets, tlsRecord.fragment, 0, tlsHeaderBuffer)
+		if err != nil {
+			fmt.Println("Error in decrypting ApplicationData:", err)
+			return
+		}
+		fmt.Printf("Length of decrypted data: %d\n", len(decrypedRecord))
+		decrypedRecord = RemoveZeroPaddingFromTail(decrypedRecord)
+		if len(decrypedRecord) == 0 {
+			fmt.Println("Error in decrypting ApplicationData")
+			return
+		}
+		tlsInnerPlainText := TLSInnerPlainText{
+			content:     decrypedRecord[:len(decrypedRecord)-1],
+			contentType: ContentType(decrypedRecord[len(decrypedRecord)-1]),
+		}
+		// get content type from the last byte
+		fmt.Printf("Received Content type: %s (%d)\n", ContentTypeName[tlsInnerPlainText.contentType], tlsInnerPlainText.contentType)
+		switch tlsInnerPlainText.contentType {
+		case HandshakeRecord:
+			fmt.Printf("Decrypted ApplicationData: %x\n", tlsInnerPlainText.content)
+			msgType := HandshakeType(tlsInnerPlainText.content[0])
+			fmt.Printf("Handshake msg_type: %d\n", msgType)
+			// extract 3 bytes
+			handshakeLength := (uint32(tlsInnerPlainText.content[1]) << 16) | (uint32(tlsInnerPlainText.content[2]) << 8) | uint32(tlsInnerPlainText.content[3])
+			fmt.Printf("Handshake message length: %d bytes\n", handshakeLength)
+			switch msgType {
+			case Finished:
+				clientSentFinishedMessage := FinishedMessage{
+					verifyData: tlsInnerPlainText.content[4:],
+				}
+				serverCalculatedFinishedMessage, err := newFinishedMessage(
+					sha256.New,
+					tlsContext.trafficSecrets.clientHandshakeTrafficSecret,
+					tlsContext.handshakeClientHello,
+					tlsContext.handshakeServerHello,
+					tlsContext.handshakeEncryptedExtensions,
+					tlsContext.handshakeCertificate,
+					tlsContext.handshakeCertificateVerify,
+					tlsContext.serverFinished,
+				)
+				if err != nil {
+					fmt.Println("Error in generating client finished message:", err)
+					return
+				}
+				if !bytes.Equal(clientSentFinishedMessage.verifyData, serverCalculatedFinishedMessage.verifyData) {
+					fmt.Println("Client Finished message does not match")
+					return
+				}
+				fmt.Printf("Client Finished Message: %x\n", clientSentFinishedMessage.Bytes())
+				fmt.Println("Client Finished message matches. Connection established!")
+			default:
+				fmt.Println("Unhandled message")
+			}
+		case ApplicationDataRecord:
+		case AlertRecord:
+		default:
+
+		}
 		// fmt.Printf("ServerHello: %x\n", handshakeResponse.Bytes())
 		// conn.Write(handshakeResponse.Bytes())
 	default:

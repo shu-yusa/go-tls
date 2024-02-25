@@ -33,3 +33,12 @@ func HKDFExpandLabel(hash func() hash.Hash, secret []byte, label string, content
 func DeriveSecret(hash func() hash.Hash, secret []byte, label string, messages [][]byte) ([]byte, error) {
 	return HKDFExpandLabel(hash, secret, label, TranscriptHash(hash, messages), hash().Size())
 }
+
+func RemoveZeroPaddingFromTail(data []byte) []byte {
+	for i := len(data) - 1; i >= 0; i-- {
+		if data[i] != 0 {
+			return data[:i+1]
+		}
+	}
+	return nil
+}
