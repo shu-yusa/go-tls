@@ -156,12 +156,12 @@ func handleMessage(
 			logger.Printf("LegacyCompressionMethod: %x\n\n", clientHello.LegacyCompressionMethod)
 
 			logger.Println("Extensions")
-			extensions := clientHello.parseExtensions(logger)
+			extensions := clientHello.ParseExtensions(logger)
 			logger.Println()
 
 			keyShareExtension := extensions[KeyShareExtensionType].(KeyShareExtension)
 
-			keySharedEntry, selectedCurve := keyShareExtension.selectECDHKeyShare()
+			keySharedEntry, selectedCurve := keyShareExtension.SelectECDHKeyShare()
 			if selectedCurve == nil {
 				logger.Println("Unsupported curve")
 				return &internalErroAlert
@@ -206,7 +206,7 @@ func handleMessage(
 			// 	fragment:            []byte{1},
 			// }.Bytes())
 
-			secrets, err := generateSecrets(hasher, selectedCurve, clientECDHPublicKey, ecdhServerPrivateKey)
+			secrets, err := GenerateSecrets(hasher, selectedCurve, clientECDHPublicKey, ecdhServerPrivateKey)
 			if err != nil {
 				logger.Println("Error generating secrets:", err)
 				return &internalErroAlert
@@ -214,7 +214,7 @@ func handleMessage(
 			logger.Printf("Shared secret(pre-master secret): %x\n", secrets.SharedSecret)
 			logger.Printf("Early Secret: %x\n", secrets.EarlySecret)
 			logger.Printf("Handshake Secret: %x\n", secrets.HandshakeSecret)
-			trafficSecrets, err := secrets.handshakeTrafficKeys(tlsRecord.Fragment, serverHelloTLSRecord.Fragment, 16, 12)
+			trafficSecrets, err := secrets.HandshakeTrafficKeys(tlsRecord.Fragment, serverHelloTLSRecord.Fragment, 16, 12)
 			if err != nil {
 				logger.Println("Error in deriving handshake keys:", err)
 			}
@@ -288,7 +288,7 @@ func handleMessage(
 				logger.Println("Error in type assertion of server private key")
 				return &internalErroAlert
 			}
-			signature, err := signCertificate(
+			signature, err := SignCertificate(
 				serverPriv,
 				tlsRecord.Fragment,                   // ClientHello
 				serverHelloTLSRecord.Fragment,        // ServerHello
@@ -327,7 +327,7 @@ func handleMessage(
 			conn.Write(certificateVerifyTLSRecord.Bytes())
 
 			// Finished message
-			finishedMessage, err := newFinishedMessage(
+			finishedMessage, err := NewFinishedMessage(
 				hasher,
 				trafficSecrets.ServerHandshakeTrafficSecret,
 				tlsRecord.Fragment,                   // ClientHello
@@ -392,7 +392,7 @@ func handleMessage(
 		}
 		logger.Printf("Key: %x\n", key)
 		logger.Printf("IV: %x\n", iv)
-		decrypedRecord, err := decryptTLSInnerPlaintext(key, iv, tlsRecord.Fragment, sequence, tlsHeaderBuffer)
+		decrypedRecord, err := DecryptTLSInnerPlaintext(key, iv, tlsRecord.Fragment, sequence, tlsHeaderBuffer)
 		if err != nil {
 			logger.Println("Error in decrypting ApplicationData:", err)
 			return &internalErroAlert
@@ -422,7 +422,7 @@ func handleMessage(
 				clientSentFinishedMessage := FinishedMessage{
 					VerifyData: tlsInnerPlainText.Content[4 : handshakeLength+4],
 				}
-				serverCalculatedFinishedMessage, err := newFinishedMessage(
+				serverCalculatedFinishedMessage, err := NewFinishedMessage(
 					sha256.New,
 					tlsContext.trafficSecrets.ClientHandshakeTrafficSecret,
 					tlsContext.handshakeClientHello,
@@ -443,7 +443,7 @@ func handleMessage(
 				logger.Printf("Client Finished Message: %x\n", clientSentFinishedMessage.Bytes())
 				logger.Printf("Client Finished message matches. Connection established!\n\n")
 				*handshakeFinished = true
-				appTrafficSecrets, err := tlsContext.secrets.applicationTrafficKeys(
+				appTrafficSecrets, err := tlsContext.secrets.ApplicationTrafficKeys(
 					tlsContext.handshakeClientHello,
 					tlsContext.handshakeServerHello,
 					tlsContext.handshakeEncryptedExtensions,
@@ -498,13 +498,8 @@ func handleMessage(
 		default:
 
 		}
-		// logger.Printf("ServerHello: %x\n", handshakeResponse.Bytes())
-		// conn.Write(handshakeResponse.Bytes())
 	default:
-		logger.Println("Received some message")
+		logger.Println("Received unsupported message")
 	}
-
-	// response := "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
-	// conn.Write([]byte(response))
 	return nil
 }

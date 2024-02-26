@@ -11,5 +11,6 @@ server-crt:
 	@# Signing the public key
 	openssl req -x509 -sha256 -days 365 -key server.key -in server.csr -out server.crt
 
-request:
+handshake:
 	openssl s_client -debug -connect localhost:443 -tls1_3 -noservername -crlf -curves secp256r1:x25519 -msg -security_debug_verbose -trace -keylogfile keylog.txt
+

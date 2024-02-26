@@ -433,7 +433,8 @@ var (
 	}
 )
 
-func (ks KeyShareExtension) selectECDHKeyShare() (*KeyShareEntry, ecdh.Curve) {
+// SelectECDHKeyShare selects a Diffie-Hellman key exchange algorithm from the KeyShareExtension
+func (ks KeyShareExtension) SelectECDHKeyShare() (*KeyShareEntry, ecdh.Curve) {
 	supportedCurves := map[NamedGroup]ecdh.Curve{
 		secp256r1: ecdh.P256(),
 		secp384r1: ecdh.P384(),
@@ -574,6 +575,7 @@ func (a Alert) Bytes() []byte {
 	return []byte{byte(a.Level), byte(a.Description)}
 }
 
+// NewClientHello creates a new ClientHelloMessage from a byte slice sent by the client
 func NewClientHello(clientHelloBuffer []byte) ClientHelloMessage {
 	legacyVersion := ProtocolVersion(binary.BigEndian.Uint16(clientHelloBuffer[0:2])) // 2 bytes
 	random := clientHelloBuffer[2:34]                                                 // 32 bytes
@@ -615,7 +617,8 @@ func NewClientHello(clientHelloBuffer []byte) ClientHelloMessage {
 	}
 }
 
-func (ch ClientHelloMessage) parseExtensions(logger *log.Logger) map[ExtensionType]interface{} {
+// ParseExtensions parses the extensions in the ClientHelloMessage with debug logging
+func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionType]interface{} {
 	var extensionMap = make(map[ExtensionType]interface{})
 	for _, extension := range ch.Extensions {
 		switch extension.ExtensionType {
@@ -782,8 +785,9 @@ func (ch ClientHelloMessage) parseExtensions(logger *log.Logger) map[ExtensionTy
 	return extensionMap
 }
 
+// NewServerHello creates a TLS Record (ApplicationData) with encryption
 func NewTLSCipherMessageText(key, iv []byte, plaintext TLSInnerPlainText, sequenceNumber uint64) (*TLSRecord, error) {
-	encryptedRecord, err := encryptTLSInnerPlaintext(key, iv, plaintext.Bytes(), sequenceNumber)
+	encryptedRecord, err := EncryptTLSInnerPlaintext(key, iv, plaintext.Bytes(), sequenceNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -805,7 +809,44 @@ func (t TLSRecord) Bytes() []byte {
 	}, t.Fragment...)
 }
 
-func (s *Secrets) handshakeTrafficKeys(clientHello []byte, serverHello []byte, keyLength int, ivLength int) (*HandshakeTrafficSecrets, error) {
+// GenerateSecrets generates the various shared secrets used for key derivation
+func GenerateSecrets(hash func() hash.Hash, curve ecdh.Curve, clientPublicKeyBytes []byte, serverPrivateKey *ecdh.PrivateKey) (*Secrets, error) {
+	// Shared secret (Pre-master Secret)
+	clientPublicKey, err := curve.NewPublicKey(clientPublicKeyBytes)
+	if err != nil {
+		return nil, err
+	}
+	sharedSecret, err := serverPrivateKey.ECDH(clientPublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Early Secret
+	zero32 := make([]byte, hash().Size())
+	earlySecret := hkdf.Extract(hash, zero32, zero32)
+
+	secretState, err := DeriveSecret(hash, earlySecret, "derived", [][]byte{})
+	if err != nil {
+		return nil, err
+	}
+	handshakeSecret := hkdf.Extract(hash, sharedSecret, secretState)
+
+	secretState, err = DeriveSecret(hash, handshakeSecret, "derived", [][]byte{})
+	if err != nil {
+		return nil, err
+	}
+	masterSecret := hkdf.Extract(hash, zero32, secretState)
+	return &Secrets{
+		Hash:            hash,
+		SharedSecret:    sharedSecret,
+		EarlySecret:     earlySecret,
+		HandshakeSecret: handshakeSecret,
+		MasterSecret:    masterSecret,
+	}, nil
+}
+
+// HandshakeTrafficKeys generates the handshake traffic keys used in handshake messages encryption
+func (s *Secrets) HandshakeTrafficKeys(clientHello []byte, serverHello []byte, keyLength int, ivLength int) (*HandshakeTrafficSecrets, error) {
 	clientHandshakeTrafficSecret, err := DeriveSecret(s.Hash, s.HandshakeSecret, "c hs traffic", [][]byte{clientHello, serverHello})
 	if err != nil {
 		return nil, err
@@ -844,7 +885,8 @@ func (s *Secrets) handshakeTrafficKeys(clientHello []byte, serverHello []byte, k
 	}, nil
 }
 
-func (s *Secrets) applicationTrafficKeys(
+// ApplicationTrafficKeys generates the application traffic keys used in application data encryption
+func (s *Secrets) ApplicationTrafficKeys(
 	clientHello []byte,
 	serverHello []byte,
 	encryptedExtensions []byte,
@@ -891,41 +933,7 @@ func (s *Secrets) applicationTrafficKeys(
 	}, nil
 }
 
-func generateSecrets(hash func() hash.Hash, curve ecdh.Curve, clientPublicKeyBytes []byte, serverPrivateKey *ecdh.PrivateKey) (*Secrets, error) {
-	// Shared secret (Pre-master Secret)
-	clientPublicKey, err := curve.NewPublicKey(clientPublicKeyBytes)
-	if err != nil {
-		return nil, err
-	}
-	sharedSecret, err := serverPrivateKey.ECDH(clientPublicKey)
-	if err != nil {
-		return nil, err
-	}
-
-	// Early Secret
-	zero32 := make([]byte, hash().Size())
-	earlySecret := hkdf.Extract(hash, zero32, zero32)
-
-	secretState, err := DeriveSecret(hash, earlySecret, "derived", [][]byte{})
-	if err != nil {
-		return nil, err
-	}
-	handshakeSecret := hkdf.Extract(hash, sharedSecret, secretState)
-
-	secretState, err = DeriveSecret(hash, handshakeSecret, "derived", [][]byte{})
-	if err != nil {
-		return nil, err
-	}
-	masterSecret := hkdf.Extract(hash, zero32, secretState)
-	return &Secrets{
-		Hash:            hash,
-		SharedSecret:    sharedSecret,
-		EarlySecret:     earlySecret,
-		HandshakeSecret: handshakeSecret,
-		MasterSecret:    masterSecret,
-	}, nil
-}
-
+// calculateNonce calculates the nonce used in AEAD
 func calculateNonce(iv []byte, sequenceNumber uint64) []byte {
 	sequenceNumberBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(sequenceNumberBytes, sequenceNumber)
@@ -938,7 +946,8 @@ func calculateNonce(iv []byte, sequenceNumber uint64) []byte {
 	return nonce
 }
 
-func encryptTLSInnerPlaintext(key, iv []byte, tlsInnerPlainText []byte, sequenceNumber uint64) ([]byte, error) {
+// EncryptTLSInnerPlaintext encrypts the TLS Inner Plaintext with AES-128-GCM-SHA256
+func EncryptTLSInnerPlaintext(key, iv []byte, tlsInnerPlainText []byte, sequenceNumber uint64) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -957,7 +966,8 @@ func encryptTLSInnerPlaintext(key, iv []byte, tlsInnerPlainText []byte, sequence
 	return encrypted, nil
 }
 
-func decryptTLSInnerPlaintext(key, iv []byte, encryptedTLSInnerPlainText []byte, sequenceNumber uint64, tlsHeader []byte) ([]byte, error) {
+// DecryptTLSInnerPlaintext decrypts the TLS Inner Plaintext with AES-128-GCM-SHA256
+func DecryptTLSInnerPlaintext(key, iv []byte, encryptedTLSInnerPlainText []byte, sequenceNumber uint64, tlsHeader []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -969,7 +979,9 @@ func decryptTLSInnerPlaintext(key, iv []byte, encryptedTLSInnerPlainText []byte,
 	return aesgcm.Open(nil, calculateNonce(iv, sequenceNumber), encryptedTLSInnerPlainText, tlsHeader)
 }
 
-func signCertificate(priv *ecdsa.PrivateKey, handshakeMessages ...[]byte) ([]byte, error) {
+// SignCertificate signs the server certificate with the private key
+// certificate is included in the handshake messages
+func SignCertificate(priv *ecdsa.PrivateKey, handshakeMessages ...[]byte) ([]byte, error) {
 	signatureTarget := bytes.Repeat([]byte{0x20}, 64)
 	signatureTarget = append(signatureTarget, []byte("TLS 1.3, server CertificateVerify")...)
 	signatureTarget = append(signatureTarget, 0x00) // separator
@@ -983,6 +995,7 @@ func signCertificate(priv *ecdsa.PrivateKey, handshakeMessages ...[]byte) ([]byt
 	return signature, err
 }
 
+// NewServerHello creates a new ServerHelloMessage with TLS1.3 and selected ECDH public key
 func NewServerHello(publicKey *ecdh.PublicKey, namedGroup NamedGroup, cipherSuite CipherSuite, sessionID []byte) (ServerHelloMessage, error) {
 	randomData := make([]byte, 32)
 	_, err := rand.Read(randomData)
@@ -1023,7 +1036,8 @@ func NewServerHello(publicKey *ecdh.PublicKey, namedGroup NamedGroup, cipherSuit
 	}, nil
 }
 
-func newFinishedMessage(hash func() hash.Hash, baseKey []byte, handshakeMessages ...[]byte) (FinishedMessage, error) {
+// NewFinishedMessage creates a new FinishedMessage with HMAC
+func NewFinishedMessage(hash func() hash.Hash, baseKey []byte, handshakeMessages ...[]byte) (FinishedMessage, error) {
 	finishedKey, err := HKDFExpandLabel(hash, baseKey, "finished", []byte{}, hash().Size())
 	if err != nil {
 		return FinishedMessage{}, err
