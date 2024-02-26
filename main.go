@@ -33,6 +33,9 @@ func fullTLSServer() {
 }
 
 func main() {
-	tls13.Server()
+	logger := log.New(log.Writer(), "", 0)
+	// logger := log.New(io.Discard, "", 0)
+
+	tls13.Server(logger)
 	// fullTLSServer()
 }

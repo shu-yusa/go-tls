@@ -16,9 +16,9 @@ func TranscriptHash(hash func() hash.Hash, messages [][]byte) []byte {
 
 func HKDFExpandLabel(hash func() hash.Hash, secret []byte, label string, content []byte, length int) ([]byte, error) {
 	hkdflabel := HKDFLabel{
-		length:  uint16(length),
-		label:   "tls13 " + label,
-		context: content,
+		Length:  uint16(length),
+		Label:   "tls13 " + label,
+		Context: content,
 	}
 
 	hkdfExpand := hkdf.Expand(hash, secret, hkdflabel.Bytes())
