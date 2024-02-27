@@ -145,11 +145,11 @@ type (
 		Length          uint16
 		KeyExchangeData []byte
 	}
-
 	KeyShareExtension struct {
 		Length       uint16
 		ClientShares []KeyShareEntry
 	}
+
 	RecordSizeLimitExtension uint16
 
 	RenegotiationInfoExtension struct {
@@ -225,6 +225,7 @@ const (
 	ServerNameExtensionType                 = 0
 	StatusRequestExtensionType              = 5
 	SupportedPointFormatsExtensionType      = 11
+	SRPExtensionType                        = 12
 	SupportedGroupsExtensionType            = 10
 	ApplicationLayerProtocolNegotiationType = 16
 	SignedCertificateTimestampExtensionType = 18

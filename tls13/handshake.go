@@ -15,6 +15,7 @@ import (
 )
 
 type (
+	// tlsContext holds secrets and handshake messages used over a connection
 	tlsContext struct {
 		secrets                      Secrets
 		trafficSecrets               HandshakeTrafficSecrets
@@ -27,6 +28,8 @@ type (
 		serverFinished               []byte
 	}
 
+	// sequenceNumbers is a counter used in the calculation of AEAD nonce.
+	// It is incremented for each record sent, and is reset to zero whenever the encryption key changes.
 	sequenceNumbers struct {
 		handshakeKeySeqNum uint64
 		appKeyClientSeqNum uint64
@@ -35,6 +38,7 @@ type (
 )
 
 var (
+	// This TLS server only supports HTTP GET request to the root path
 	acceptableGetRequest = "GET / HTTP/1.1\r\nHost: localhost\r\n"
 	internalErrorAlert   = Alert{Level: fatal, Description: internal_error}
 )
@@ -53,16 +57,15 @@ func Server(logger *log.Logger) {
 
 	for {
 		conn, err := listener.Accept()
-		logger.Printf("Accepted connection from %s\n\n", conn.RemoteAddr().String())
 		if err != nil {
 			log.Printf("Failed to accept connection: %v", err)
 			continue
 		}
+		logger.Printf("Accepted connection from %s\n\n", conn.RemoteAddr().String())
 
 		go func(conn net.Conn) {
 			defer func(conn net.Conn) {
-				err := conn.Close()
-				if err != nil {
+				if err := conn.Close(); err != nil {
 					logger.Printf("Failed to close connection: %v\n", err)
 				}
 			}(conn)
@@ -76,11 +79,10 @@ func Server(logger *log.Logger) {
 			applicationDataBuffer := make([]byte, 0)
 			for {
 				alert := handleMessage(conn, logger, tlsContext, &sequenceNumbers, &handshakeFinished, &applicationDataBuffer)
-				logger.Printf("Sequence numbers: %v\n", sequenceNumbers.appKeyServerSeqNum)
 				if alert != nil {
-					logger.Println("Sending alert to the client")
+					logger.Println("Sending an Alert record to the client")
 					var key, iv []byte
-					if tlsContext.applicationTrafficSecrets.ServerWriteKey != nil {
+					if handshakeFinished {
 						key = tlsContext.applicationTrafficSecrets.ServerWriteKey
 						iv = tlsContext.applicationTrafficSecrets.ServerWriteIV
 					} else {
