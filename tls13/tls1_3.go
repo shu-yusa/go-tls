@@ -31,7 +31,7 @@ type (
 	PSKKeyExchangeMode uint8
 	NameType           uint8 // for ServerNameExtension
 
-	// Either of TLSPlainText or TLSCipherMessageText
+	// TLSRecord represents either TLSPlainText or TLSCipherMessageText
 	TLSRecord struct {
 		ContentType         ContentType
 		LegacyRecordVersion ProtocolVersion
@@ -39,7 +39,7 @@ type (
 		Fragment            []byte
 	}
 
-	// TLS Record used as a payload for encryption
+	// TLSInnerPlainText represents TLS Record used as a payload for encryption
 	TLSInnerPlainText struct {
 		Content     []byte
 		contentType ContentType // real content type
@@ -785,7 +785,7 @@ func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionTy
 	return extensionMap
 }
 
-// NewServerHello creates a TLS Record (ApplicationData) with encryption
+// NewTLSCipherMessageText creates a TLS Record (ApplicationData) with encryption
 func NewTLSCipherMessageText(key, iv []byte, plaintext TLSInnerPlainText, sequenceNumber uint64) (*TLSRecord, error) {
 	encryptedRecord, err := EncryptTLSInnerPlaintext(key, iv, plaintext.Bytes(), sequenceNumber)
 	if err != nil {

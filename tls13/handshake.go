@@ -36,7 +36,7 @@ type (
 
 var (
 	acceptableGetRequest = "GET / HTTP/1.1\r\nHost: localhost\r\n"
-	internalErroAlert    = Alert{Level: fatal, Description: internal_error}
+	internalErrorAlert   = Alert{Level: fatal, Description: internal_error}
 )
 
 func Server(logger *log.Logger) {
@@ -44,7 +44,11 @@ func Server(logger *log.Logger) {
 	if err != nil {
 		log.Fatalf("Failed to listen on port 443: %v", err)
 	}
-	defer listener.Close()
+	defer func(listener net.Listener) {
+		if err := listener.Close(); err != nil {
+			log.Printf("Failed to close listener: %v", err)
+		}
+	}(listener)
 	logger.Println("Listening on port 443")
 
 	for {
@@ -56,7 +60,12 @@ func Server(logger *log.Logger) {
 		}
 
 		go func(conn net.Conn) {
-			defer conn.Close()
+			defer func(conn net.Conn) {
+				err := conn.Close()
+				if err != nil {
+					logger.Printf("Failed to close connection: %v\n", err)
+				}
+			}(conn)
 			tlsContext := &tlsContext{}
 			sequenceNumbers := sequenceNumbers{
 				handshakeKeySeqNum: 0,
@@ -87,7 +96,9 @@ func Server(logger *log.Logger) {
 						},
 						sequenceNumbers.appKeyServerSeqNum,
 					)
-					conn.Write(encryptedResponse.Bytes())
+					if _, err = conn.Write(encryptedResponse.Bytes()); err != nil {
+						logger.Printf("Failed to send data: %v\n", err)
+					}
 					break
 				}
 			}
@@ -108,7 +119,7 @@ func handleMessage(
 	_, err := conn.Read(tlsHeaderBuffer)
 	if err != nil {
 		logger.Printf("Error in reading from connection: %v\n", err)
-		return &internalErroAlert
+		return &internalErrorAlert
 	}
 	length := binary.BigEndian.Uint16(tlsHeaderBuffer[3:5])
 
@@ -116,7 +127,7 @@ func handleMessage(
 	_, err = io.ReadFull(conn, payloadBuffer)
 	if err != nil {
 		logger.Printf("Error reading payload from connection: %v\n", err)
-		return &internalErroAlert
+		return &internalErrorAlert
 	}
 
 	tlsRecord := &TLSRecord{
@@ -164,7 +175,7 @@ func handleMessage(
 			keySharedEntry, selectedCurve := keyShareExtension.SelectECDHKeyShare()
 			if selectedCurve == nil {
 				logger.Println("Unsupported curve")
-				return &internalErroAlert
+				return &internalErrorAlert
 			}
 			hasher := sha256.New
 			logger.Printf("Selected curve: %s (%x)\n", NamedGroupName[keySharedEntry.Group], keySharedEntry.Group)
@@ -175,14 +186,14 @@ func handleMessage(
 			ecdhServerPrivateKey, err := selectedCurve.GenerateKey(rand.Reader)
 			if err != nil {
 				logger.Println("Error in calculating ECDH private key")
-				return &internalErroAlert
+				return &internalErrorAlert
 			}
 			logger.Printf("ECDH Server Private key:%x\n", ecdhServerPrivateKey.Bytes())
 			logger.Printf("ECDH Server Public key:%x\n", ecdhServerPrivateKey.PublicKey().Bytes())
 			serverHello, err := NewServerHello(ecdhServerPrivateKey.PublicKey(), keySharedEntry.Group, TLS_AES_128_GCM_SHA256, clientHello.LegacySessionID)
 			if err != nil {
 				logger.Println("Error constructing ServerHello message:", err)
-				return &internalErroAlert
+				return &internalErrorAlert
 			}
 			handshakeServerHello := Handshake[ServerHelloMessage]{
 				MsgType:          ServerHello,
@@ -196,7 +207,9 @@ func handleMessage(
 				Fragment:            handshakeServerHello.Bytes(),
 			}
 			logger.Printf("ServerHello: %x\n\n", serverHelloTLSRecord.Bytes())
-			conn.Write(serverHelloTLSRecord.Bytes())
+			if _, err := conn.Write(serverHelloTLSRecord.Bytes()); err != nil {
+				return &internalErrorAlert
+			}
 
 			// // ChangeCipherSpec message
 			// conn.Write(TLSPlainText{
@@ -209,7 +222,7 @@ func handleMessage(
 			secrets, err := GenerateSecrets(hasher, selectedCurve, clientECDHPublicKey, ecdhServerPrivateKey)
 			if err != nil {
 				logger.Println("Error generating secrets:", err)
-				return &internalErroAlert
+				return &internalErrorAlert
 			}
 			logger.Printf("Shared secret(pre-master secret): %x\n", secrets.SharedSecret)
 			logger.Printf("Early Secret: %x\n", secrets.EarlySecret)
@@ -242,13 +255,15 @@ func handleMessage(
 				0,
 			)
 			logger.Printf("Encrypted EncryptedExtensions TLS Record: %x\n\n", encryptedExtensionsTLSRecord.Bytes())
-			conn.Write(encryptedExtensionsTLSRecord.Bytes())
+			if _, err = conn.Write(encryptedExtensionsTLSRecord.Bytes()); err != nil {
+				return &internalErrorAlert
+			}
 
 			// Certificate message
 			serverCert, err := tls.LoadX509KeyPair("server.crt", "server.key")
 			if err != nil {
 				logger.Println("Error in loading server certificate:", err)
-				return &internalErroAlert
+				return &internalErrorAlert
 			}
 			certificate := CertificateMessage{
 				CertificateRequestContext: []byte{},
@@ -277,16 +292,18 @@ func handleMessage(
 			)
 			if err != nil {
 				logger.Println("Error in encrypting Certificate message:", err)
-				return &internalErroAlert
+				return &internalErrorAlert
 			}
 			logger.Printf("Certificate TLS Record: %x\n\n", certificateTLSRecord.Bytes())
-			conn.Write(certificateTLSRecord.Bytes())
+			if _, err = conn.Write(certificateTLSRecord.Bytes()); err != nil {
+				return &internalErrorAlert
+			}
 
 			// CertificateVerify message
 			serverPriv, ok := serverCert.PrivateKey.(*ecdsa.PrivateKey)
 			if !ok {
 				logger.Println("Error in type assertion of server private key")
-				return &internalErroAlert
+				return &internalErrorAlert
 			}
 			signature, err := SignCertificate(
 				serverPriv,
@@ -297,7 +314,7 @@ func handleMessage(
 			)
 			if err != nil {
 				logger.Println("Error in signing certificate:", err)
-				return &internalErroAlert
+				return &internalErrorAlert
 			}
 			logger.Printf("length of signature: %d\n", len(signature))
 			logger.Printf("Signature: %x\n", signature)
@@ -321,10 +338,12 @@ func handleMessage(
 			)
 			if err != nil {
 				logger.Println("Error in encrypting CertificateVerify message:", err)
-				return &internalErroAlert
+				return &internalErrorAlert
 			}
 			logger.Printf("CertificateVerify TLS Record: %x\n\n", certificateVerifyTLSRecord.Bytes())
-			conn.Write(certificateVerifyTLSRecord.Bytes())
+			if _, err = conn.Write(certificateVerifyTLSRecord.Bytes()); err != nil {
+				return &internalErrorAlert
+			}
 
 			// Finished message
 			finishedMessage, err := NewFinishedMessage(
@@ -343,7 +362,7 @@ func handleMessage(
 			}
 			if err != nil {
 				logger.Println("Error in generating finished key:", err)
-				return &internalErroAlert
+				return &internalErrorAlert
 			}
 			finishedTLSRecord, err := NewTLSCipherMessageText(
 				trafficSecrets.ServerWriteKey,
@@ -356,12 +375,14 @@ func handleMessage(
 			)
 			if err != nil {
 				logger.Println("Error in encrypting Finished message:", err)
-				return &internalErroAlert
+				return &internalErrorAlert
 			}
 			logger.Printf("Finished TLS Record: %x\n\n", finishedTLSRecord.Bytes())
-			conn.Write(finishedTLSRecord.Bytes())
+			if _, err = conn.Write(finishedTLSRecord.Bytes()); err != nil {
+				return &internalErrorAlert
+			}
 
-			// St[]byteore traffic secrets
+			// Store traffic secrets
 			tlsContext.secrets = *secrets
 			tlsContext.trafficSecrets = *trafficSecrets
 			tlsContext.handshakeClientHello = tlsRecord.Fragment
@@ -392,20 +413,20 @@ func handleMessage(
 		}
 		logger.Printf("Key: %x\n", key)
 		logger.Printf("IV: %x\n", iv)
-		decrypedRecord, err := DecryptTLSInnerPlaintext(key, iv, tlsRecord.Fragment, sequence, tlsHeaderBuffer)
+		decryptedRecord, err := DecryptTLSInnerPlaintext(key, iv, tlsRecord.Fragment, sequence, tlsHeaderBuffer)
 		if err != nil {
 			logger.Println("Error in decrypting ApplicationData:", err)
-			return &internalErroAlert
+			return &internalErrorAlert
 		}
-		logger.Printf("Length of decrypted data: %d\n", len(decrypedRecord))
-		decrypedRecord = RemoveZeroPaddingFromTail(decrypedRecord)
-		if len(decrypedRecord) == 0 {
+		logger.Printf("Length of decrypted data: %d\n", len(decryptedRecord))
+		decryptedRecord = RemoveZeroPaddingFromTail(decryptedRecord)
+		if len(decryptedRecord) == 0 {
 			logger.Println("Error in decrypting ApplicationData")
-			return &internalErroAlert
+			return &internalErrorAlert
 		}
 		tlsInnerPlainText := TLSInnerPlainText{
-			Content:     decrypedRecord[:len(decrypedRecord)-1],
-			contentType: ContentType(decrypedRecord[len(decrypedRecord)-1]),
+			Content:     decryptedRecord[:len(decryptedRecord)-1],
+			contentType: ContentType(decryptedRecord[len(decryptedRecord)-1]),
 		}
 		// get content type from the last byte
 		logger.Printf("Received Content type: %s (%d)\n", ContentTypeName[tlsInnerPlainText.contentType], tlsInnerPlainText.contentType)
@@ -434,11 +455,11 @@ func handleMessage(
 				)
 				if err != nil {
 					logger.Println("Error in generating client finished message:", err)
-					return &internalErroAlert
+					return &internalErrorAlert
 				}
 				if !bytes.Equal(clientSentFinishedMessage.VerifyData, serverCalculatedFinishedMessage.VerifyData) {
 					logger.Println("Client Finished message does not match")
-					return &internalErroAlert
+					return &internalErrorAlert
 				}
 				logger.Printf("Client Finished Message: %x\n", clientSentFinishedMessage.Bytes())
 				logger.Printf("Client Finished message matches. Connection established!\n\n")
@@ -455,7 +476,7 @@ func handleMessage(
 				)
 				if err != nil {
 					logger.Println("Error in deriving application traffic secrets:", err)
-					return &internalErroAlert
+					return &internalErrorAlert
 				}
 				logger.Printf("Client Application Traffic Secret: %x\n", appTrafficSecrets.ClientApplicationTrafficSecret)
 				logger.Printf("Server Application Traffic Secret: %x\n", appTrafficSecrets.ServerApplicationTrafficSecret)
@@ -482,10 +503,12 @@ func handleMessage(
 					)
 					if err != nil {
 						logger.Println("Error in encrypting response:", err)
-						return &internalErroAlert
+						return &internalErrorAlert
 					}
 					logger.Printf("Encrypted response: %x\n", encryptedResponse.Bytes())
-					conn.Write(encryptedResponse.Bytes())
+					if _, err = conn.Write(encryptedResponse.Bytes()); err != nil {
+						return &Alert{Level: warning, Description: close_notify}
+					}
 					logger.Println("Sent hello TLS1.3 response")
 					seqNum.appKeyServerSeqNum++
 				}
@@ -494,7 +517,7 @@ func handleMessage(
 			logger.Printf("Application buffer:\n%s\n", *applicationBuffer)
 		case AlertRecord:
 			// Return error to the client
-			return &internalErroAlert
+			return &internalErrorAlert
 		default:
 
 		}
