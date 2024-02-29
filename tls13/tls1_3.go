@@ -42,7 +42,7 @@ type (
 	// TLSInnerPlainText represents TLS Record used as a payload for encryption
 	TLSInnerPlainText struct {
 		Content     []byte
-		contentType ContentType // real content type
+		ContentType ContentType // real content type
 		Zeros       []byte      // padding
 	}
 
@@ -350,6 +350,15 @@ var (
 		ApplicationDataRecord:  "Application Data",
 	}
 
+	HandshakeTypeName = map[HandshakeType]string{
+		ClientHello:         "ClientHello",
+		ServerHello:         "ServerHello",
+		EncryptedExtensions: "EncryptedExtensions",
+		Certificate:         "Certificate",
+		CertificateVerify:   "CertificateVerify",
+		Finished:            "Finished",
+	}
+
 	CipherSuiteName = map[CipherSuite]string{
 		TLS_AES_128_GCM_SHA256:                        "TLS_AES_128_GCM_SHA256",
 		TLS_AES_256_GCM_SHA384:                        "TLS_AES_256_GCM_SHA384",
@@ -452,7 +461,7 @@ func (ks KeyShareExtension) SelectECDHKeyShare() (*KeyShareEntry, ecdh.Curve) {
 }
 
 func (t TLSInnerPlainText) Bytes() []byte {
-	return append(append(t.Content, byte(t.contentType)), t.Zeros...)
+	return append(append(t.Content, byte(t.ContentType)), t.Zeros...)
 }
 
 func (hs Handshake[T]) Bytes() []byte {
@@ -624,7 +633,7 @@ func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionTy
 	for _, extension := range ch.Extensions {
 		switch extension.ExtensionType {
 		case ServerNameExtensionType:
-			logger.Printf("- ServerNameExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  ServerNameExtension (%x)\n", extension.ExtensionType)
 			length := binary.BigEndian.Uint16(extension.Data[0:2])
 			cursor := 2
 			var serverNameList []ServerName
@@ -644,7 +653,7 @@ func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionTy
 				ServerNameList: serverNameList,
 			}
 		case SupportedPointFormatsExtensionType:
-			logger.Printf("- SupportedPointFormatsExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  SupportedPointFormatsExtension (%x)\n", extension.ExtensionType)
 			length := uint8(extension.Data[0])
 			var ECPointFormats []uint8
 			for i := 0; i < int(length); i++ {
@@ -657,7 +666,7 @@ func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionTy
 				ECPointFormats: ECPointFormats,
 			}
 		case ApplicationLayerProtocolNegotiationType:
-			logger.Printf("- ApplicationLayerProtocolNegotiation (%x)\n", extension.ExtensionType)
+			logger.Printf("  ApplicationLayerProtocolNegotiation (%x)\n", extension.ExtensionType)
 			length := binary.BigEndian.Uint16(extension.Data[0:2])
 			cursor := 2
 			protocoleNameList := []ProtocolName{}
@@ -673,16 +682,16 @@ func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionTy
 				ProtocoleNameList: protocoleNameList,
 			}
 		case DelegateCredentialExtensionType:
-			logger.Printf("- DelegateCredentialExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  DelegateCredentialExtension (%x)\n", extension.ExtensionType)
 			logger.Printf("    Data: %x\n", extension.Data)
 		case StatusRequestExtensionType:
-			logger.Printf("- StatusRequestExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  StatusRequestExtension (%x)\n", extension.ExtensionType)
 			logger.Printf("    Data: %x\n", extension.Data)
 		case EncryptedClientHelloExtensionType:
-			logger.Printf("- EncryptedClientHelloExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  EncryptedClientHelloExtension (%x)\n", extension.ExtensionType)
 			logger.Printf("    Data: %x\n", extension.Data)
 		case SupportedGroupsExtensionType:
-			logger.Printf("- SupportedGroupsExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  SupportedGroupsExtension (%x)\n", extension.ExtensionType)
 			length := binary.BigEndian.Uint16(extension.Data[0:2])
 			var NamedGroupList []NamedGroup
 			for i := 0; i < int(length); i += 2 {
@@ -695,7 +704,7 @@ func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionTy
 				NamedGroupList: NamedGroupList,
 			}
 		case SignatureAlgorithmsExtensionType:
-			logger.Printf("- SignatureAlgorithmsExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  SignatureAlgorithmsExtension (%x)\n", extension.ExtensionType)
 			length := binary.BigEndian.Uint16(extension.Data[0:2])
 			// logger.Println("  SignatureAlgorithmsExtension length:", length)
 			var signatureAlgorithms []SignatureScheme
@@ -709,7 +718,7 @@ func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionTy
 				SupportedSignatureAlgorithms: signatureAlgorithms,
 			}
 		case KeyShareExtensionType:
-			logger.Printf("- KeyShareExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  KeyShareExtension (%x)\n", extension.ExtensionType)
 			length := binary.BigEndian.Uint16(extension.Data[0:2])
 			// logger.Println("  KeyShareExtension length:", length)
 			var clientShares []KeyShareEntry
@@ -733,10 +742,10 @@ func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionTy
 				ClientShares: clientShares,
 			}
 		case ExtendedMasterSecretExtensionType:
-			logger.Printf("- ExtendedMasterSecretExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  ExtendedMasterSecretExtension (%x)\n", extension.ExtensionType)
 		case SupportedVersionsExtensionType:
 			// https://tex2e.github.io/rfc-translater/html/rfc8446.html#4-2-1--Supported-Versions
-			logger.Printf("- SupportedVersionsExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  SupportedVersionsExtension (%x)\n", extension.ExtensionType)
 			length := uint8(extension.Data[0])
 			versions := []ProtocolVersion{}
 			for i := 0; i < int(length); i += 2 {
@@ -748,7 +757,7 @@ func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionTy
 				SelectedVersions: versions,
 			}
 		case PSKKeyExchangeModesExtensionType:
-			logger.Printf("- PSKKeyExchangeModesExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  PSKKeyExchangeModesExtension (%x)\n", extension.ExtensionType)
 			length := uint8(extension.Data[0])
 			keModes := []PSKKeyExchangeMode{}
 			for i := 0; i < int(length); i++ {
@@ -762,15 +771,15 @@ func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionTy
 			}
 		case EncryptThenMacExtensionType:
 			// https://tex2e.github.io/rfc-translater/html/rfc7366.html
-			logger.Printf("- EncryptThenMacExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  EncryptThenMacExtension (%x)\n", extension.ExtensionType)
 		case SessionTicketExtensionType:
-			logger.Println("- SessionTicketExtension")
+			logger.Println("  SessionTicketExtension")
 		case RecordSizeLimitExtensionType:
-			logger.Printf("- RecordSizeLimitExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  RecordSizeLimitExtension (%x)\n", extension.ExtensionType)
 			logger.Printf("    RecordSizeLimit: %d bytes\n", binary.BigEndian.Uint16(extension.Data))
 			extensionMap[RecordSizeLimitExtensionType] = RecordSizeLimitExtension(binary.BigEndian.Uint16(extension.Data))
 		case RenegotiationInfoExtensionType:
-			logger.Printf("- RenegotiationInfoExtension (%x)\n", extension.ExtensionType)
+			logger.Printf("  RenegotiationInfoExtension (%x)\n", extension.ExtensionType)
 			length := uint8(extension.Data[0])
 			if length > 0 {
 				extensionMap[RenegotiationInfoExtensionType] = RenegotiationInfoExtension{
@@ -780,7 +789,7 @@ func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionTy
 				logger.Printf("    Renegotiated Connection: %x\n", extension.Data[1:])
 			}
 		default:
-			logger.Printf("- Extension data: %x\n", extension)
+			logger.Printf("  Extension data: %x\n", extension)
 		}
 	}
 	return extensionMap
@@ -980,20 +989,16 @@ func DecryptTLSInnerPlaintext(key, iv []byte, encryptedTLSInnerPlainText []byte,
 	return aesgcm.Open(nil, calculateNonce(iv, sequenceNumber), encryptedTLSInnerPlainText, tlsHeader)
 }
 
-// SignCertificate signs the server certificate with the private key
-// certificate is included in the handshake messages
-func SignCertificate(priv *ecdsa.PrivateKey, handshakeMessages ...[]byte) ([]byte, error) {
+// SignCertificate signs the server certificate with the corresponding private key.
+// certificate is included in the handshake messages used for the calculation of Transcript-Hash
+func SignCertificate(hash func() hash.Hash, priv *ecdsa.PrivateKey, handshakeMessages [][]byte) ([]byte, error) {
 	signatureTarget := bytes.Repeat([]byte{0x20}, 64)
 	signatureTarget = append(signatureTarget, []byte("TLS 1.3, server CertificateVerify")...)
 	signatureTarget = append(signatureTarget, 0x00) // separator
-	signatureTarget = append(signatureTarget, TranscriptHash(sha256.New, handshakeMessages)...)
+	signatureTarget = append(signatureTarget, TranscriptHash(hash, handshakeMessages)...)
 
 	hashed := sha256.Sum256(signatureTarget)
-	signature, err := ecdsa.SignASN1(rand.Reader, priv, hashed[:])
-	if err != nil {
-		return nil, err
-	}
-	return signature, err
+	return ecdsa.SignASN1(rand.Reader, priv, hashed[:])
 }
 
 // NewServerHello creates a new ServerHelloMessage with TLS1.3 and selected ECDH public key
@@ -1038,7 +1043,7 @@ func NewServerHello(publicKey *ecdh.PublicKey, namedGroup NamedGroup, cipherSuit
 }
 
 // NewFinishedMessage creates a new FinishedMessage with HMAC
-func NewFinishedMessage(hash func() hash.Hash, baseKey []byte, handshakeMessages ...[]byte) (FinishedMessage, error) {
+func NewFinishedMessage(hash func() hash.Hash, baseKey []byte, handshakeMessages [][]byte) (FinishedMessage, error) {
 	finishedKey, err := HKDFExpandLabel(hash, baseKey, "finished", []byte{}, hash().Size())
 	if err != nil {
 		return FinishedMessage{}, err
