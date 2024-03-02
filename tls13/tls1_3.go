@@ -463,6 +463,15 @@ func (ks KeyShareExtension) SelectECDHKeyShare() (*KeyShareEntry, ecdh.Curve) {
 	return nil, nil
 }
 
+func (sl SignatureAlgorithmsExtension) SupportsAlgorithm(s SignatureScheme) bool {
+	for _, supported := range sl.SupportedSignatureAlgorithms {
+		if supported == s {
+			return true
+		}
+	}
+	return false
+}
+
 func (t TLSInnerPlainText) Bytes() []byte {
 	return append(append(t.Content, byte(t.ContentType)), t.Zeros...)
 }

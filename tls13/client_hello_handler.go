@@ -198,6 +198,12 @@ func HandleClientHello(
 		logger.Println("Unsupported signature algorithm")
 		return nil, &Alert{Level: fatal, Description: handshake_failure}
 	}
+	// Check if client supports the signature algorithm
+	if !extensions[SignatureAlgorithmsExtensionType].(SignatureAlgorithmsExtension).SupportsAlgorithm(algorithm) {
+		logger.Printf("Client does not support the signature algorithm: %s", SignatureAlgorithmName[algorithm])
+		return nil, &Alert{Level: fatal, Description: handshake_failure}
+	}
+
 	certificateVerifyMessage := CertificateVerifyMessage{
 		Algorithm: algorithm,
 		Signature: signature,

@@ -81,7 +81,7 @@ func Server(logger *log.Logger) {
 					var key, iv []byte
 					var seqNum uint64
 					if newTLSContext == nil {
-						panic("Error before handshake is finished.")
+						break
 					}
 					if newTLSContext.FinishedHandshake() {
 						key = newTLSContext.ApplicationTrafficSecrets.ServerWriteKey
