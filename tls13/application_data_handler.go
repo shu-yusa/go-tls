@@ -6,10 +6,12 @@ import (
 	"strings"
 )
 
-func handleApplicationData(
+// HandleApplicationData handles the decrypted application data received from the client. In this example, it checks if the
+// received data is an HTTP GET request and sends a response back.
+func HandleApplicationData(
 	conn net.Conn,
 	tlsInnerPlainText TLSInnerPlainText,
-	prevTLSContext *TLSContext,
+	tlsContext *TLSContext,
 	seqNum *sequenceNumbers,
 	applicationBuffer *[]byte,
 	logger *log.Logger,
@@ -22,8 +24,8 @@ func handleApplicationData(
 			logger.Println("Received HTTP GET request")
 			response := "HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\nHello, TLS 1.3!\n"
 			encryptedResponse, err := NewTLSCipherMessageText(
-				prevTLSContext.ApplicationTrafficSecrets.ServerWriteKey,
-				prevTLSContext.ApplicationTrafficSecrets.ServerWriteIV,
+				tlsContext.ApplicationTrafficSecrets.ServerWriteKey,
+				tlsContext.ApplicationTrafficSecrets.ServerWriteIV,
 				TLSInnerPlainText{
 					Content:     []byte(response),
 					ContentType: ApplicationDataRecord,

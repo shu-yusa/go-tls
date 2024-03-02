@@ -2,6 +2,7 @@ package tls13
 
 import (
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -9,7 +10,7 @@ import (
 	"net"
 )
 
-func handleClientHello(
+func HandleClientHello(
 	conn net.Conn,
 	handshakeLength uint32,
 	clientHelloBytes []byte,
@@ -91,6 +92,7 @@ func handleClientHello(
 	logger.Printf("Shared secret(pre-master secret): %x\n", secrets.SharedSecret)
 	logger.Printf("Early Secret: %x\n", secrets.EarlySecret)
 	logger.Printf("Handshake Secret: %x\n", secrets.HandshakeSecret)
+	logger.Printf("Master Secret: %x\n", secrets.MasterSecret)
 	trafficSecrets, err := secrets.HandshakeTrafficKeys(clientHelloBytes, serverHelloTLSRecord.Fragment, 16, 12)
 	if err != nil {
 		logger.Println("Error in deriving handshake keys:", err)
@@ -98,17 +100,21 @@ func handleClientHello(
 	logger.Printf("Client Handshake Traffic Secret: %x\n", trafficSecrets.ClientHandshakeTrafficSecret)
 	logger.Printf("Server Handshake Traffic Secret: %x\n", trafficSecrets.ServerHandshakeTrafficSecret)
 	logger.Printf("Server write key: %x\n", trafficSecrets.ServerWriteKey)
-	logger.Printf("Server IV: %x\n\n", trafficSecrets.ServerWriteIV)
+	logger.Printf("Server IV: %x\n", trafficSecrets.ServerWriteIV)
+	logger.Printf("Client write key: %x\n", trafficSecrets.ClientWriteKey)
+	logger.Printf("Client IV: %x\n\n", trafficSecrets.ClientWriteIV)
 
 	// EncryptedExtensions message
-	encryptedExtensions := EncryptedExtensionsMessage{
+	encryptedExtensionsMessage := EncryptedExtensionsMessage{
 		Extensions: []Extension{},
 	}
 	handshakeEncryptedExtensions := Handshake[EncryptedExtensionsMessage]{
 		MsgType:          EncryptedExtensions,
-		Length:           uint32(len(encryptedExtensions.Bytes())),
-		HandshakeMessage: encryptedExtensions,
+		Length:           uint32(len(encryptedExtensionsMessage.Bytes())),
+		HandshakeMessage: encryptedExtensionsMessage,
 	}
+	logger.Printf("EncryptedExtensions: %x\n", encryptedExtensionsMessage.Bytes())
+	logger.Printf("EncryptedExtensions Length: %d\n", len(encryptedExtensionsMessage.Bytes()))
 	encryptedExtensionsTLSRecord, err := NewTLSCipherMessageText(
 		trafficSecrets.ServerWriteKey,
 		trafficSecrets.ServerWriteIV,
@@ -130,7 +136,7 @@ func handleClientHello(
 		logger.Println("Error in loading server certificate:", err)
 		return nil, &internalErrorAlert
 	}
-	certificate := CertificateMessage{
+	certificateMessage := CertificateMessage{
 		CertificateRequestContext: []byte{},
 		CertificateList: []CertificateEntry{
 			{
@@ -141,11 +147,11 @@ func handleClientHello(
 	}
 	handshakeCertificate := Handshake[CertificateMessage]{
 		MsgType:          Certificate,
-		Length:           uint32(len(certificate.Bytes())),
-		HandshakeMessage: certificate,
+		Length:           uint32(len(certificateMessage.Bytes())),
+		HandshakeMessage: certificateMessage,
 	}
-	logger.Printf("Certificate: %x\n", certificate.Bytes())
-	logger.Printf("Certificate Length: %d\n\n", len(certificate.Bytes()))
+	logger.Printf("Certificate: %x\n", certificateMessage.Bytes())
+	logger.Printf("Certificate Length: %d\n", len(certificateMessage.Bytes()))
 	certificateTLSRecord, err := NewTLSCipherMessageText(
 		trafficSecrets.ServerWriteKey,
 		trafficSecrets.ServerWriteIV,
@@ -166,14 +172,9 @@ func handleClientHello(
 	logger.Printf("Certificate sent\n\n")
 
 	// CertificateVerify message
-	serverPriv, ok := serverCert.PrivateKey.(*ecdsa.PrivateKey)
-	if !ok {
-		logger.Println("Error in type assertion of server private key")
-		return nil, &internalErrorAlert
-	}
 	signature, err := SignCertificate(
 		hasher,
-		serverPriv,
+		serverCert.PrivateKey,
 		[][]byte{
 			clientHelloBytes,                     // ClientHello
 			serverHelloTLSRecord.Fragment,        // ServerHello
@@ -187,8 +188,18 @@ func handleClientHello(
 	}
 	logger.Printf("Signature: %x\n", signature)
 	logger.Printf("Signature length: %d\n", len(signature))
+	var algorithm SignatureScheme
+	switch serverCert.PrivateKey.(type) {
+	case ed25519.PrivateKey:
+		algorithm = Ed25519
+	case *ecdsa.PrivateKey:
+		algorithm = ECDSA_SECP256R1_SHA256
+	default:
+		logger.Println("Unsupported signature algorithm")
+		return nil, &Alert{Level: fatal, Description: handshake_failure}
+	}
 	certificateVerifyMessage := CertificateVerifyMessage{
-		Algorithm: ecdsa_secp256r1_sha256,
+		Algorithm: algorithm,
 		Signature: signature,
 	}
 	handshakeCertificateVerify := Handshake[CertificateVerifyMessage]{
@@ -196,6 +207,8 @@ func handleClientHello(
 		Length:           uint32(len(certificateVerifyMessage.Bytes())),
 		HandshakeMessage: certificateVerifyMessage,
 	}
+	logger.Printf("CertificateVerify: %x\n", certificateVerifyMessage.Bytes())
+	logger.Printf("CertificateVerify Length: %d\n", len(certificateVerifyMessage.Bytes()))
 	certificateVerifyTLSRecord, err := NewTLSCipherMessageText(
 		trafficSecrets.ServerWriteKey,
 		trafficSecrets.ServerWriteIV,
@@ -236,6 +249,8 @@ func handleClientHello(
 		logger.Println("Error in generating finished key:", err)
 		return nil, &internalErrorAlert
 	}
+	logger.Printf("Finished: %x\n", finishedMessage.Bytes())
+	logger.Printf("Finished Length: %d\n", len(finishedMessage.Bytes()))
 	finishedTLSRecord, err := NewTLSCipherMessageText(
 		trafficSecrets.ServerWriteKey,
 		trafficSecrets.ServerWriteIV,

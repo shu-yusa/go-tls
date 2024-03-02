@@ -79,12 +79,18 @@ func Server(logger *log.Logger) {
 				if alert != nil {
 					logger.Println("Sending Alert record to the client")
 					var key, iv []byte
+					var seqNum uint64
+					if newTLSContext == nil {
+						panic("Error before handshake is finished.")
+					}
 					if newTLSContext.FinishedHandshake() {
 						key = newTLSContext.ApplicationTrafficSecrets.ServerWriteKey
 						iv = newTLSContext.ApplicationTrafficSecrets.ServerWriteIV
+						seqNum = sequenceNumbers.HandshakeKeySeqNum
 					} else {
 						key = newTLSContext.TrafficSecrets.ServerWriteKey
 						iv = newTLSContext.TrafficSecrets.ServerWriteIV
+						seqNum = sequenceNumbers.AppKeyServerSeqNum
 					}
 					encryptedResponse, _ := NewTLSCipherMessageText(
 						key,
@@ -93,7 +99,7 @@ func Server(logger *log.Logger) {
 							Content:     alert.Bytes(),
 							ContentType: AlertRecord,
 						},
-						sequenceNumbers.AppKeyServerSeqNum,
+						seqNum,
 					)
 					if _, err = conn.Write(encryptedResponse.Bytes()); err != nil {
 						logger.Printf("Failed to send data: %v\n", err)
@@ -150,7 +156,7 @@ func handleMessage(
 		logger.Printf("Handshake message length: %d\n", handshakeLength)
 		switch msgType {
 		case ClientHello: // 0x01
-			return handleClientHello(conn, handshakeLength, tlsRecord.Fragment, logger)
+			return HandleClientHello(conn, handshakeLength, tlsRecord.Fragment, logger)
 		}
 	case ChangeCipherSpecRecord:
 		logger.Printf("Ignored.\n")
@@ -193,12 +199,12 @@ func handleMessage(
 			logger.Printf("Handshake message length: %d bytes\n", handshakeLength)
 			switch msgType {
 			case Finished:
-				return handleFinished(handshakeLength, tlsInnerPlainText.Content, prevTLSContext, logger)
+				return HandleFinished(handshakeLength, tlsInnerPlainText.Content, prevTLSContext, logger)
 			default:
 				logger.Println("Unhandled message")
 			}
 		case ApplicationDataRecord:
-			if alert := handleApplicationData(conn, tlsInnerPlainText, prevTLSContext, seqNum, applicationBuffer, logger); alert != nil {
+			if alert := HandleApplicationData(conn, tlsInnerPlainText, prevTLSContext, seqNum, applicationBuffer, logger); alert != nil {
 				return prevTLSContext, alert
 			}
 		case AlertRecord:

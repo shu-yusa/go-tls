@@ -2,14 +2,17 @@ package tls13
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"hash"
 	"log"
 
@@ -274,23 +277,23 @@ const (
 	ffdhe8192 NamedGroup = 0x0104
 
 	// SignatureSchemes
-	ecdsa_secp256r1_sha256            SignatureScheme = 0x0403
-	ecdsa_secp384r1_sha384            SignatureScheme = 0x0503
-	ecdsa_secp521r1_sha512            SignatureScheme = 0x0603
-	ed25519                           SignatureScheme = 0x0807
-	ed448                             SignatureScheme = 0x0808
-	rsa_pss_pss_sha256                SignatureScheme = 0x0809
-	rsa_pss_pss_sha384                SignatureScheme = 0x080a
-	rsa_pss_pss_sha512                SignatureScheme = 0x080b
-	ecdsa_brainpoolP256r1tls13_sha256 SignatureScheme = 0x081a
-	ecdsa_brainpoolP384r1tls13_sha384 SignatureScheme = 0x081b
-	ecdsa_brainpoolP512r1tls13_sha512 SignatureScheme = 0x081c
-	rsa_pss_rsae_sha256               SignatureScheme = 0x0804
-	rsa_pss_rsae_sha384               SignatureScheme = 0x0805
-	rsa_pss_rsae_sha512               SignatureScheme = 0x0806
-	rsa_pkcs1_sha256                  SignatureScheme = 0x0401
-	rsa_pkcs1_sha384                  SignatureScheme = 0x0501
-	rsa_pkcs1_sha512                  SignatureScheme = 0x0601
+	ECDSA_SECP256R1_SHA256            SignatureScheme = 0x0403
+	ECDSA_SECP384R1_SHA384            SignatureScheme = 0x0503
+	ECDSA_SECP521R1_SHA512            SignatureScheme = 0x0603
+	Ed25519                           SignatureScheme = 0x0807
+	ED448                             SignatureScheme = 0x0808
+	RSA_PSS_PSS_SHA256                SignatureScheme = 0x0809
+	RSA_PSS_PSS_SHA384                SignatureScheme = 0x080a
+	RSA_PSS_PSS_SHA512                SignatureScheme = 0x080b
+	ECDSA_BRAINPOOLp256R1TLS13_SHA256 SignatureScheme = 0x081a
+	ECDSA_BRAINPOOLp384R1TLS13_SHA384 SignatureScheme = 0x081b
+	ECDSA_BRAINPOOLp512R1TLS13_SHA512 SignatureScheme = 0x081c
+	RSA_PSS_RSAE_SHA256               SignatureScheme = 0x0804
+	RSA_PSS_RSAE_SHA384               SignatureScheme = 0x0805
+	RSA_PSS_RSAE_SHA512               SignatureScheme = 0x0806
+	RSA_PKCS1_SHA256                  SignatureScheme = 0x0401
+	RSA_PKCS1_SHA384                  SignatureScheme = 0x0501
+	RSA_PKCS1_SHA512                  SignatureScheme = 0x0601
 
 	// PSKKeyExchangeMode
 	psk_ke     PSKKeyExchangeMode = 0
@@ -423,23 +426,23 @@ var (
 	}
 
 	SignatureAlgorithmName = map[SignatureScheme]string{
-		ecdsa_secp256r1_sha256:            "ecdsa_secp256r1_sha256",
-		ecdsa_secp384r1_sha384:            "ecdsa_secp384r1_sha384",
-		ecdsa_secp521r1_sha512:            "ecdsa_secp521r1_sha512",
-		ed25519:                           "ed25519",
-		ed448:                             "ed448",
-		rsa_pss_pss_sha256:                "rsa_pss_pss_sha256",
-		rsa_pss_pss_sha384:                "rsa_pss_pss_sha384",
-		rsa_pss_pss_sha512:                "rsa_pss_pss_sha512",
-		ecdsa_brainpoolP256r1tls13_sha256: "ecdsa_brainpoolP256r1tls13_sha256",
-		ecdsa_brainpoolP384r1tls13_sha384: "ecdsa_brainpoolP384r1tls13_sha384",
-		ecdsa_brainpoolP512r1tls13_sha512: "ecdsa_brainpoolP512r1tls13_sha512",
-		rsa_pss_rsae_sha256:               "rsa_pss_rsae_sha256",
-		rsa_pss_rsae_sha384:               "rsa_pss_rsae_sha384",
-		rsa_pss_rsae_sha512:               "rsa_pss_rsae_sha512",
-		rsa_pkcs1_sha256:                  "rsa_pkcs1_sha256",
-		rsa_pkcs1_sha384:                  "rsa_pkcs1_sha384",
-		rsa_pkcs1_sha512:                  "rsa_pkcs1_sha512",
+		ECDSA_SECP256R1_SHA256:            "ecdsa_secp256r1_sha256",
+		ECDSA_SECP384R1_SHA384:            "ecdsa_secp384r1_sha384",
+		ECDSA_SECP521R1_SHA512:            "ecdsa_secp521r1_sha512",
+		Ed25519:                           "ed25519",
+		ED448:                             "ed448",
+		RSA_PSS_PSS_SHA256:                "rsa_pss_pss_sha256",
+		RSA_PSS_PSS_SHA384:                "rsa_pss_pss_sha384",
+		RSA_PSS_PSS_SHA512:                "rsa_pss_pss_sha512",
+		ECDSA_BRAINPOOLp256R1TLS13_SHA256: "ecdsa_brainpoolP256r1tls13_sha256",
+		ECDSA_BRAINPOOLp384R1TLS13_SHA384: "ecdsa_brainpoolP384r1tls13_sha384",
+		ECDSA_BRAINPOOLp512R1TLS13_SHA512: "ecdsa_brainpoolP512r1tls13_sha512",
+		RSA_PSS_RSAE_SHA256:               "rsa_pss_rsae_sha256",
+		RSA_PSS_RSAE_SHA384:               "rsa_pss_rsae_sha384",
+		RSA_PSS_RSAE_SHA512:               "rsa_pss_rsae_sha512",
+		RSA_PKCS1_SHA256:                  "rsa_pkcs1_sha256",
+		RSA_PKCS1_SHA384:                  "rsa_pkcs1_sha384",
+		RSA_PKCS1_SHA512:                  "rsa_pkcs1_sha512",
 	}
 )
 
@@ -991,14 +994,22 @@ func DecryptTLSInnerPlaintext(key, iv []byte, encryptedTLSInnerPlainText []byte,
 
 // SignCertificate signs the server certificate with the corresponding private key.
 // certificate is included in the handshake messages used for the calculation of Transcript-Hash
-func SignCertificate(hash func() hash.Hash, priv *ecdsa.PrivateKey, handshakeMessages [][]byte) ([]byte, error) {
+func SignCertificate(hash func() hash.Hash, priv crypto.PrivateKey, handshakeMessages [][]byte) ([]byte, error) {
 	signatureTarget := bytes.Repeat([]byte{0x20}, 64)
 	signatureTarget = append(signatureTarget, []byte("TLS 1.3, server CertificateVerify")...)
 	signatureTarget = append(signatureTarget, 0x00) // separator
 	signatureTarget = append(signatureTarget, TranscriptHash(hash, handshakeMessages)...)
 
-	hashed := sha256.Sum256(signatureTarget)
-	return ecdsa.SignASN1(rand.Reader, priv, hashed[:])
+	switch privKey := priv.(type) {
+	case ed25519.PrivateKey:
+		// For Ed25519, the hashing is done internally, so we directly pass the message to be signed.
+		return ed25519.Sign(privKey, signatureTarget), nil
+	case *ecdsa.PrivateKey:
+		hashed := sha256.Sum256(signatureTarget)
+		return ecdsa.SignASN1(rand.Reader, privKey, hashed[:])
+	default:
+		return nil, fmt.Errorf("unsupported private key type: %T", priv)
+	}
 }
 
 // NewServerHello creates a new ServerHelloMessage with TLS1.3 and selected ECDH public key
