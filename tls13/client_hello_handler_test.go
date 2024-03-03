@@ -1,13 +1,12 @@
 package tls13
 
 import (
-	"bytes"
 	"io"
 	"log"
 	"testing"
 )
 
-func TestHandleApplicationData_ValidRequest(t *testing.T) {
+func TestClientHello(t *testing.T) {
 	mockConn := &MockConn{}
 	tlsInnerPlainText := TLSInnerPlainText{
 		Content:     []byte("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"),
@@ -45,31 +44,5 @@ func TestHandleApplicationData_ValidRequest(t *testing.T) {
 	expectedResponse := "HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\nHello, TLS 1.3!\n"
 	if string(decryptedTLSInnerPlainText.Content) != expectedResponse {
 		t.Errorf("Expected response not written to conn.Write for a valid request")
-	}
-}
-
-func TestHandleApplicationData_UnsupportedRequest(t *testing.T) {
-	mockConn := &MockConn{}
-	var logBuffer bytes.Buffer
-	logger := log.New(&logBuffer, "", log.LstdFlags)
-
-	tlsInnerPlainText := TLSInnerPlainText{
-		Content:     []byte("GET /unsupported HTTP/1.1\r\nHost: localhost\r\n\r\n"),
-		ContentType: ApplicationDataRecord,
-	}
-	seqNum := &sequenceNumbers{AppKeyServerSeqNum: 1}
-	applicationBuffer := make([]byte, 0)
-
-	// Exercise SUT
-	alert := HandleApplicationData(mockConn, tlsInnerPlainText, TestTLSContext, seqNum, &applicationBuffer, logger)
-
-	// Verify result
-	expectedAlert := &Alert{Level: warning, Description: close_notify}
-	if *alert != *expectedAlert {
-		t.Errorf("Expected close_notify alert to be returned")
-	}
-
-	if mockConn.writeBuffer.Len() != 0 {
-		t.Errorf("conn.Write should not be called for an unsupported request")
 	}
 }

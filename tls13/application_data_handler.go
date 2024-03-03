@@ -40,10 +40,10 @@ func HandleApplicationData(
 			if _, err = conn.Write(encryptedResponse.Bytes()); err != nil {
 				return &Alert{Level: warning, Description: close_notify}
 			}
-			logger.Println("Sent hello TLS1.3 response")
+			logger.Printf("<--Sent HTTP response to the client\n\n")
 			seqNum.AppKeyServerSeqNum++
 		}
-		logger.Printf("Send close_notify to client\n")
+		logger.Printf("Send close_notify to the client\n")
 		return &Alert{Level: warning, Description: close_notify}
 	}
 	logger.Printf("Application buffer:\n%s\n", *applicationBuffer)

@@ -77,12 +77,11 @@ func Server(logger *log.Logger) {
 			for {
 				newTLSContext, alert := handleMessage(conn, logger, &prevTLSContext, &sequenceNumbers, &applicationDataBuffer)
 				if alert != nil {
-					logger.Println("Sending Alert record to the client")
-					var key, iv []byte
-					var seqNum uint64
 					if newTLSContext == nil {
 						break
 					}
+					var key, iv []byte
+					var seqNum uint64
 					if newTLSContext.FinishedHandshake() {
 						key = newTLSContext.ApplicationTrafficSecrets.ServerWriteKey
 						iv = newTLSContext.ApplicationTrafficSecrets.ServerWriteIV
@@ -104,6 +103,7 @@ func Server(logger *log.Logger) {
 					if _, err = conn.Write(encryptedResponse.Bytes()); err != nil {
 						logger.Printf("Failed to send data: %v\n", err)
 					}
+					logger.Println("<--Sent Alert record to the client")
 					break
 				}
 				prevTLSContext = *newTLSContext
@@ -159,8 +159,8 @@ func handleMessage(
 			return HandleClientHello(conn, handshakeLength, tlsRecord.Fragment, logger)
 		}
 	case ChangeCipherSpecRecord:
-		logger.Printf("Ignored.\n")
-	case ApplicationDataRecord: // 23 stands for ApplicationData record type (Wrapping data structure)
+		logger.Printf("Ignored.\n\n")
+	case ApplicationDataRecord: // Application data with encrpyted payload
 		var key, iv []byte
 		var sequence uint64
 		if prevTLSContext.FinishedHandshake() {
@@ -174,8 +174,6 @@ func handleMessage(
 			sequence = seqNum.HandshakeKeySeqNum
 			seqNum.HandshakeKeySeqNum++
 		}
-		logger.Printf("Key: %x\n", key)
-		logger.Printf("IV: %x\n", iv)
 		decryptedRecord, err := DecryptTLSInnerPlaintext(key, iv, tlsRecord.Fragment, sequence, tlsHeaderBuffer)
 		if err != nil {
 			logger.Println("Error in decrypting ApplicationData:", err)
@@ -203,10 +201,9 @@ func handleMessage(
 			default:
 				logger.Println("Unhandled message")
 			}
-		case ApplicationDataRecord:
-			if alert := HandleApplicationData(conn, tlsInnerPlainText, prevTLSContext, seqNum, applicationBuffer, logger); alert != nil {
-				return prevTLSContext, alert
-			}
+		case ApplicationDataRecord: // Application data with plaintext payload
+			alert := HandleApplicationData(conn, tlsInnerPlainText, prevTLSContext, seqNum, applicationBuffer, logger)
+			return prevTLSContext, alert
 		case AlertRecord:
 			// Return error to the client
 			logger.Printf("Received Alert: %x", tlsInnerPlainText.Content)

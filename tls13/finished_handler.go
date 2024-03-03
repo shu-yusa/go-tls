@@ -55,10 +55,10 @@ func HandleFinished(
 	}
 	logger.Printf("Client Application Traffic Secret: %x\n", appTrafficSecrets.ClientApplicationTrafficSecret)
 	logger.Printf("Server Application Traffic Secret: %x\n", appTrafficSecrets.ServerApplicationTrafficSecret)
-	logger.Printf("Server write key: %x\n", appTrafficSecrets.ServerWriteKey)
-	logger.Printf("Server IV: %x\n", appTrafficSecrets.ServerWriteIV)
-	logger.Printf("Client write key: %x\n", appTrafficSecrets.ClientWriteKey)
-	logger.Printf("Client IV: %x\n\n", appTrafficSecrets.ClientWriteIV)
+	logger.Printf("Server Write key: %x\n", appTrafficSecrets.ServerWriteKey)
+	logger.Printf("Server Write IV:  %x\n", appTrafficSecrets.ServerWriteIV)
+	logger.Printf("Client Write key: %x\n", appTrafficSecrets.ClientWriteKey)
+	logger.Printf("Client Write IV:  %x\n\n", appTrafficSecrets.ClientWriteIV)
 	newTLSContext := prevTLSContext
 	newTLSContext.ApplicationTrafficSecrets = *appTrafficSecrets
 	return newTLSContext, nil

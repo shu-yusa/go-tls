@@ -182,14 +182,12 @@ type (
 	}
 
 	HandshakeTrafficSecrets struct {
-		ClientHandshakeTrafficSecret   []byte
-		ServerHandshakeTrafficSecret   []byte
-		ClientApplicationTrafficSecret []byte
-		ServerApplicationTrafficSecret []byte
-		ServerWriteKey                 []byte
-		ServerWriteIV                  []byte
-		ClientWriteKey                 []byte
-		ClientWriteIV                  []byte
+		ClientHandshakeTrafficSecret []byte
+		ServerHandshakeTrafficSecret []byte
+		ServerWriteKey               []byte
+		ServerWriteIV                []byte
+		ClientWriteKey               []byte
+		ClientWriteIV                []byte
 	}
 
 	ApplicationTrafficSecrets struct {
@@ -896,14 +894,12 @@ func (s *Secrets) HandshakeTrafficKeys(clientHello []byte, serverHello []byte, k
 		return nil, err
 	}
 	return &HandshakeTrafficSecrets{
-		ClientHandshakeTrafficSecret:   clientHandshakeTrafficSecret,
-		ServerHandshakeTrafficSecret:   serverHandshakeTrafficSecret,
-		ClientApplicationTrafficSecret: nil,
-		ServerApplicationTrafficSecret: nil,
-		ServerWriteKey:                 serverWriteKey,
-		ServerWriteIV:                  serverWriteIV,
-		ClientWriteKey:                 clientWriteKey,
-		ClientWriteIV:                  clientWriteIV,
+		ClientHandshakeTrafficSecret: clientHandshakeTrafficSecret,
+		ServerHandshakeTrafficSecret: serverHandshakeTrafficSecret,
+		ServerWriteKey:               serverWriteKey,
+		ServerWriteIV:                serverWriteIV,
+		ClientWriteKey:               clientWriteKey,
+		ClientWriteIV:                clientWriteIV,
 	}, nil
 }
 

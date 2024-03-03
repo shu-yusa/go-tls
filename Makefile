@@ -3,7 +3,7 @@ start:
 	@echo "Starting server..."
 	@go run main.go
 
-secp256r1-crt:
+server-crt:
 	@# Generate public key
 	openssl ecparam -genkey -name prime256v1 -out server.key
 	@# Create CSR
@@ -11,7 +11,7 @@ secp256r1-crt:
 	@# Signing the public key
 	openssl req -x509 -sha256 -days 365 -key server.key -in server.csr -out server.crt
 
-ed25519-cert:
+ed25519-crt:
 	@# Generate public key
 	openssl genpkey -algorithm Ed25519 -out server.key
 	@# Signing the public key

@@ -51,8 +51,8 @@ func HandleClientHello(
 		logger.Println("Error in calculating ECDH private key")
 		return nil, &internalErrorAlert
 	}
-	logger.Printf("ECDH Server Private key:%x\n", ecdhServerPrivateKey.Bytes())
-	logger.Printf("ECDH Server Public key:%x\n", ecdhServerPrivateKey.PublicKey().Bytes())
+	logger.Printf("ECDH Server Private key: %x\n", ecdhServerPrivateKey.Bytes())
+	logger.Printf("ECDH Server Public  key: %x\n", ecdhServerPrivateKey.PublicKey().Bytes())
 	serverHello, err := NewServerHello(ecdhServerPrivateKey.PublicKey(), keySharedEntry.Group, TLS_AES_128_GCM_SHA256, clientHello.LegacySessionID)
 	if err != nil {
 		logger.Println("Error constructing ServerHello message:", err)
@@ -73,7 +73,7 @@ func HandleClientHello(
 	if _, err := conn.Write(serverHelloTLSRecord.Bytes()); err != nil {
 		return nil, &internalErrorAlert
 	}
-	logger.Printf("ServerHello sent\n\n")
+	logger.Printf("<--ServerHello sent\n\n")
 
 	// // ChangeCipherSpec message
 	// conn.Write(TLSPlainText{
@@ -89,20 +89,20 @@ func HandleClientHello(
 		logger.Println("Error generating secrets:", err)
 		return nil, &internalErrorAlert
 	}
-	logger.Printf("Shared secret(pre-master secret): %x\n", secrets.SharedSecret)
-	logger.Printf("Early Secret: %x\n", secrets.EarlySecret)
+	logger.Printf("Shared Secret:    %x\n", secrets.SharedSecret)
+	logger.Printf("Early Secret:     %x\n", secrets.EarlySecret)
 	logger.Printf("Handshake Secret: %x\n", secrets.HandshakeSecret)
-	logger.Printf("Master Secret: %x\n", secrets.MasterSecret)
+	logger.Printf("Master Secret:    %x\n", secrets.MasterSecret)
 	trafficSecrets, err := secrets.HandshakeTrafficKeys(clientHelloBytes, serverHelloTLSRecord.Fragment, 16, 12)
 	if err != nil {
 		logger.Println("Error in deriving handshake keys:", err)
 	}
 	logger.Printf("Client Handshake Traffic Secret: %x\n", trafficSecrets.ClientHandshakeTrafficSecret)
 	logger.Printf("Server Handshake Traffic Secret: %x\n", trafficSecrets.ServerHandshakeTrafficSecret)
-	logger.Printf("Server write key: %x\n", trafficSecrets.ServerWriteKey)
-	logger.Printf("Server IV: %x\n", trafficSecrets.ServerWriteIV)
-	logger.Printf("Client write key: %x\n", trafficSecrets.ClientWriteKey)
-	logger.Printf("Client IV: %x\n\n", trafficSecrets.ClientWriteIV)
+	logger.Printf("Server Write key: %x\n", trafficSecrets.ServerWriteKey)
+	logger.Printf("Server Write IV:  %x\n", trafficSecrets.ServerWriteIV)
+	logger.Printf("Client Write key: %x\n", trafficSecrets.ClientWriteKey)
+	logger.Printf("Client Write IV:  %x\n\n", trafficSecrets.ClientWriteIV)
 
 	// EncryptedExtensions message
 	encryptedExtensionsMessage := EncryptedExtensionsMessage{
@@ -128,7 +128,7 @@ func HandleClientHello(
 	if _, err = conn.Write(encryptedExtensionsTLSRecord.Bytes()); err != nil {
 		return nil, &internalErrorAlert
 	}
-	logger.Printf("EncryptedExtensions sent\n\n")
+	logger.Printf("<--EncryptedExtensions sent\n\n")
 
 	// Certificate message
 	serverCert, err := tls.LoadX509KeyPair("server.crt", "server.key")
@@ -169,7 +169,7 @@ func HandleClientHello(
 	if _, err = conn.Write(certificateTLSRecord.Bytes()); err != nil {
 		return nil, &internalErrorAlert
 	}
-	logger.Printf("Certificate sent\n\n")
+	logger.Printf("<--Certificate sent\n\n")
 
 	// CertificateVerify message
 	signature, err := SignCertificate(
@@ -186,8 +186,6 @@ func HandleClientHello(
 		logger.Println("Error in signing certificate:", err)
 		return nil, &internalErrorAlert
 	}
-	logger.Printf("Signature: %x\n", signature)
-	logger.Printf("Signature length: %d\n", len(signature))
 	var algorithm SignatureScheme
 	switch serverCert.PrivateKey.(type) {
 	case ed25519.PrivateKey:
@@ -198,6 +196,9 @@ func HandleClientHello(
 		logger.Println("Unsupported signature algorithm")
 		return nil, &Alert{Level: fatal, Description: handshake_failure}
 	}
+	logger.Printf("Signature: %x\n", signature)
+	logger.Printf("Signature length: %d\n", len(signature))
+	logger.Printf("Signature algorithm: %s\n", SignatureAlgorithmName[algorithm])
 	// Check if client supports the signature algorithm
 	if !extensions[SignatureAlgorithmsExtensionType].(SignatureAlgorithmsExtension).SupportsAlgorithm(algorithm) {
 		logger.Printf("Client does not support the signature algorithm: %s", SignatureAlgorithmName[algorithm])
@@ -232,7 +233,7 @@ func HandleClientHello(
 	if _, err = conn.Write(certificateVerifyTLSRecord.Bytes()); err != nil {
 		return nil, &internalErrorAlert
 	}
-	logger.Printf("CertificateVerify sent\n\n")
+	logger.Printf("<--CertificateVerify sent\n\n")
 
 	// Finished message
 	finishedMessage, err := NewFinishedMessage(
@@ -274,7 +275,7 @@ func HandleClientHello(
 	if _, err = conn.Write(finishedTLSRecord.Bytes()); err != nil {
 		return nil, &internalErrorAlert
 	}
-	logger.Printf("Finished sent\n\n")
+	logger.Printf("<--Finished sent\n\n")
 
 	// Store traffic secrets for subsequent messages
 	return &TLSContext{

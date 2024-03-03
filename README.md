@@ -14,7 +14,7 @@ This project aims to deepen the understanding of TLS 1.3 by implementing a full 
 
     Create a local self-signed certificate by running:
     ```
-    make server-cert
+    make server-crt
     ```
     This will generate `server.crt` and `server.key` files.
 
@@ -66,17 +66,17 @@ Below is a sequence diagram illustrating the handshake process:
 
 ```
 (Client)              (Server)
-   |                      |
-   |-----ClientHello----->|
-   |                      |
-   |<---ServerHello-------|
-   |<--EncryptedExtensions|
-   |<-------Certificate---|
-   |<--CertificateVerify--|
-   |<-------Finished------|
-   |                      |
-   |-------Finished------>|
-   |                      |
+   |                        |
+   |-------ClientHello----->|
+   |                        |
+   |<------ServerHello------|
+   |<--EncryptedExtensions--|
+   |<------Certificate------|
+   |<---CertificateVerify---|
+   |<-------Finished--------|
+   |                        |
+   |--------Finished------->|
+   |                        |
 ```
 
 ## References
