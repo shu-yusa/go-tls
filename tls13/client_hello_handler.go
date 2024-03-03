@@ -191,7 +191,7 @@ func HandleClientHello(
 	var algorithm SignatureScheme
 	switch serverCert.PrivateKey.(type) {
 	case ed25519.PrivateKey:
-		algorithm = Ed25519
+		algorithm = ED25519
 	case *ecdsa.PrivateKey:
 		algorithm = ECDSA_SECP256R1_SHA256
 	default:
