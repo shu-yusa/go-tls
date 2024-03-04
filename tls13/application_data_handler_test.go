@@ -1,7 +1,6 @@
 package tls13
 
 import (
-	"bytes"
 	"io"
 	"log"
 	"testing"
@@ -25,7 +24,7 @@ func TestHandleApplicationData_ValidRequest(t *testing.T) {
 		t.Errorf("Expected close_notify alert to be returned")
 	}
 
-	response := mockConn.writeBuffer.Bytes()
+	response := mockConn.writeCalls[0]
 	decryptedRecord, err := DecryptTLSInnerPlaintext(
 		TestTLSContext.ApplicationTrafficSecrets.ServerWriteKey,
 		TestTLSContext.ApplicationTrafficSecrets.ServerWriteIV,
@@ -50,8 +49,6 @@ func TestHandleApplicationData_ValidRequest(t *testing.T) {
 
 func TestHandleApplicationData_UnsupportedRequest(t *testing.T) {
 	mockConn := &MockConn{}
-	var logBuffer bytes.Buffer
-	logger := log.New(&logBuffer, "", log.LstdFlags)
 
 	tlsInnerPlainText := TLSInnerPlainText{
 		Content:     []byte("GET /unsupported HTTP/1.1\r\nHost: localhost\r\n\r\n"),
@@ -59,6 +56,8 @@ func TestHandleApplicationData_UnsupportedRequest(t *testing.T) {
 	}
 	seqNum := &sequenceNumbers{AppKeyServerSeqNum: 1}
 	applicationBuffer := make([]byte, 0)
+
+	logger := log.New(io.Discard, "", 0)
 
 	// Exercise SUT
 	alert := HandleApplicationData(mockConn, tlsInnerPlainText, TestTLSContext, seqNum, &applicationBuffer, logger)
@@ -69,7 +68,7 @@ func TestHandleApplicationData_UnsupportedRequest(t *testing.T) {
 		t.Errorf("Expected close_notify alert to be returned")
 	}
 
-	if mockConn.writeBuffer.Len() != 0 {
+	if len(mockConn.writeCalls) != 0 {
 		t.Errorf("conn.Write should not be called for an unsupported request")
 	}
 }

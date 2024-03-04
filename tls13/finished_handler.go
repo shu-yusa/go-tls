@@ -18,7 +18,7 @@ func HandleFinished(
 	}
 	serverCalculatedFinishedMessage, err := NewFinishedMessage(
 		sha256.New,
-		prevTLSContext.TrafficSecrets.ClientHandshakeTrafficSecret,
+		prevTLSContext.HandshakeTrafficSecrets.ClientHandshakeTrafficSecret,
 		[][]byte{
 			prevTLSContext.HandshakeClientHello,
 			prevTLSContext.HandshakeServerHello,

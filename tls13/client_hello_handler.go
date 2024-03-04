@@ -3,9 +3,9 @@ package tls13
 import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"io"
 	"log"
 	"net"
 )
@@ -14,6 +14,9 @@ func HandleClientHello(
 	conn net.Conn,
 	handshakeLength uint32,
 	clientHelloBytes []byte,
+	certPath string,
+	keyPath string,
+	randReader io.Reader,
 	logger *log.Logger,
 ) (*TLSContext, *Alert) {
 	// 4 bytes offset by TLS Record ContentType and Length
@@ -46,7 +49,7 @@ func HandleClientHello(
 	clientECDHPublicKey := keySharedEntry.KeyExchangeData
 
 	// ServerHello message
-	ecdhServerPrivateKey, err := selectedCurve.GenerateKey(rand.Reader)
+	ecdhServerPrivateKey, err := selectedCurve.GenerateKey(randReader)
 	if err != nil {
 		logger.Println("Error in calculating ECDH private key")
 		return nil, &internalErrorAlert
@@ -131,7 +134,7 @@ func HandleClientHello(
 	logger.Printf("<--EncryptedExtensions sent\n\n")
 
 	// Certificate message
-	serverCert, err := tls.LoadX509KeyPair("server.crt", "server.key")
+	serverCert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
 		logger.Println("Error in loading server certificate:", err)
 		return nil, &internalErrorAlert
@@ -280,7 +283,7 @@ func HandleClientHello(
 	// Store traffic secrets for subsequent messages
 	return &TLSContext{
 		Secrets:                      *secrets,
-		TrafficSecrets:               *trafficSecrets,
+		HandshakeTrafficSecrets:      *trafficSecrets,
 		HandshakeClientHello:         clientHelloBytes,
 		HandshakeServerHello:         serverHelloTLSRecord.Fragment,
 		HandshakeEncryptedExtensions: handshakeEncryptedExtensions.Bytes(),

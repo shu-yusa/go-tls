@@ -1,6 +1,7 @@
 package tls13
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -12,7 +13,7 @@ type (
 	// TLSContext holds secrets and handshake messages used over a connection
 	TLSContext struct {
 		Secrets                      Secrets
-		TrafficSecrets               HandshakeTrafficSecrets
+		HandshakeTrafficSecrets      HandshakeTrafficSecrets
 		ApplicationTrafficSecrets    ApplicationTrafficSecrets
 		HandshakeClientHello         []byte
 		HandshakeServerHello         []byte
@@ -75,7 +76,7 @@ func Server(logger *log.Logger) {
 			}
 			applicationDataBuffer := make([]byte, 0)
 			for {
-				newTLSContext, alert := handleMessage(conn, logger, &prevTLSContext, &sequenceNumbers, &applicationDataBuffer)
+				newTLSContext, alert := handleMessage(conn, "server.crt", "server.key", logger, &prevTLSContext, &sequenceNumbers, &applicationDataBuffer)
 				if alert != nil {
 					if newTLSContext == nil {
 						break
@@ -87,8 +88,8 @@ func Server(logger *log.Logger) {
 						iv = newTLSContext.ApplicationTrafficSecrets.ServerWriteIV
 						seqNum = sequenceNumbers.HandshakeKeySeqNum
 					} else {
-						key = newTLSContext.TrafficSecrets.ServerWriteKey
-						iv = newTLSContext.TrafficSecrets.ServerWriteIV
+						key = newTLSContext.HandshakeTrafficSecrets.ServerWriteKey
+						iv = newTLSContext.HandshakeTrafficSecrets.ServerWriteIV
 						seqNum = sequenceNumbers.AppKeyServerSeqNum
 					}
 					encryptedResponse, _ := NewTLSCipherMessageText(
@@ -114,6 +115,8 @@ func Server(logger *log.Logger) {
 
 func handleMessage(
 	conn net.Conn,
+	certPath string,
+	keyPath string,
 	logger *log.Logger,
 	prevTLSContext *TLSContext,
 	seqNum *sequenceNumbers,
@@ -156,7 +159,7 @@ func handleMessage(
 		logger.Printf("Handshake message length: %d\n", handshakeLength)
 		switch msgType {
 		case ClientHello: // 0x01
-			return HandleClientHello(conn, handshakeLength, tlsRecord.Fragment, logger)
+			return HandleClientHello(conn, handshakeLength, tlsRecord.Fragment, certPath, keyPath, rand.Reader, logger)
 		}
 	case ChangeCipherSpecRecord:
 		logger.Printf("Ignored.\n\n")
@@ -169,8 +172,8 @@ func handleMessage(
 			sequence = seqNum.AppKeyClientSeqNum
 			seqNum.AppKeyClientSeqNum++
 		} else {
-			key = prevTLSContext.TrafficSecrets.ClientWriteKey
-			iv = prevTLSContext.TrafficSecrets.ClientWriteIV
+			key = prevTLSContext.HandshakeTrafficSecrets.ClientWriteKey
+			iv = prevTLSContext.HandshakeTrafficSecrets.ClientWriteIV
 			sequence = seqNum.HandshakeKeySeqNum
 			seqNum.HandshakeKeySeqNum++
 		}
