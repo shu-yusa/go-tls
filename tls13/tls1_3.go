@@ -783,7 +783,7 @@ func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionTy
 			// https://tex2e.github.io/rfc-translater/html/rfc7366.html
 			logger.Printf("  EncryptThenMacExtension (%x)\n", extension.ExtensionType)
 		case SessionTicketExtensionType:
-			logger.Println("  SessionTicketExtension")
+			logger.Printf("  SessionTicketExtension (%x)\n", extension.ExtensionType)
 		case RecordSizeLimitExtensionType:
 			logger.Printf("  RecordSizeLimitExtension (%x)\n", extension.ExtensionType)
 			logger.Printf("    RecordSizeLimit: %d bytes\n", binary.BigEndian.Uint16(extension.Data))
