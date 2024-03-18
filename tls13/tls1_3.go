@@ -223,25 +223,25 @@ const (
 	RawPublicKey CertificateType = 0x02
 
 	// https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml
-	ServerNameExtensionType                 = 0
-	StatusRequestExtensionType              = 5
-	SupportedPointFormatsExtensionType      = 11
-	SRPExtensionType                        = 12
-	SupportedGroupsExtensionType            = 10
-	ApplicationLayerProtocolNegotiationType = 16
-	SignedCertificateTimestampExtensionType = 18
-	DelegateCredentialExtensionType         = 34
-	CompressCertificateExtensionType        = 27
-	RecordSizeLimitExtensionType            = 28
-	SessionTicketExtensionType              = 35
-	EncryptThenMacExtensionType             = 22
-	ExtendedMasterSecretExtensionType       = 23
-	SignatureAlgorithmsExtensionType        = 13
-	SupportedVersionsExtensionType          = 43
-	PSKKeyExchangeModesExtensionType        = 45
-	KeyShareExtensionType                   = 51
-	EncryptedClientHelloExtensionType       = 65037
-	RenegotiationInfoExtensionType          = 65281
+	ServerNameExtensionType                 ExtensionType = 0x0000 // 0
+	StatusRequestExtensionType              ExtensionType = 0x0005 // 5
+	SupportedPointFormatsExtensionType      ExtensionType = 0x000b // 11
+	SRPExtensionType                        ExtensionType = 0x000c // 12
+	SupportedGroupsExtensionType            ExtensionType = 0x000a // 10
+	ApplicationLayerProtocolNegotiationType ExtensionType = 0x0010 // 16
+	SignedCertificateTimestampExtensionType ExtensionType = 0x0012 // 18
+	DelegateCredentialExtensionType         ExtensionType = 0x0022 // 34
+	CompressCertificateExtensionType        ExtensionType = 0x001b // 27
+	RecordSizeLimitExtensionType            ExtensionType = 0x001c // 28
+	SessionTicketExtensionType              ExtensionType = 0x0023 // 35
+	EncryptThenMacExtensionType             ExtensionType = 0x0016 // 22
+	ExtendedMasterSecretExtensionType       ExtensionType = 0x0017 // 23
+	SignatureAlgorithmsExtensionType        ExtensionType = 0x000d // 13
+	SupportedVersionsExtensionType          ExtensionType = 0x002b // 43
+	PSKKeyExchangeModesExtensionType        ExtensionType = 0x002d // 45
+	KeyShareExtensionType                   ExtensionType = 0x0033 // 51
+	EncryptedClientHelloExtensionType       ExtensionType = 0xFE0D // 65037
+	RenegotiationInfoExtensionType          ExtensionType = 0xFF01 // 65281
 
 	// CipherSuites
 	TLS_AES_128_GCM_SHA256                        CipherSuite = 0x1301
