@@ -65,7 +65,7 @@ The implementation covers the following messages in the TLS 1.3 full handshake p
 Below is a sequence diagram illustrating the handshake process:
 
 ```
-(Client)              (Server)
+(Client)                 (Server)
    |                        |
    |-------ClientHello----->|
    |                        |

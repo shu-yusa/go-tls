@@ -18,7 +18,7 @@ ed25519-crt:
 	openssl req -new -x509 -key server.key -days 365 -out server.crt -subj "/C=JP/ST=Tokyo/L=Tokyo/O=MyOrganization/OU=MyUnit/CN=localhost"
 
 handshake:
-	openssl s_client -debug -connect localhost:443 -tls1_3 -noservername -crlf -curves x25519:secp256r1 -sigalgs ed25519:ECDSA+SHA256 -msg -security_debug_verbose -trace -keylogfile keylog.txt
+	openssl s_client -debug -connect localhost:443 -tls1_3 -noservername -crlf -curves x25519:secp256r1 -sigalgs ECDSA+SHA256:ed25519 -msg -security_debug_verbose -trace -keylogfile keylog.txt
 
 test:
 	go test ./...
