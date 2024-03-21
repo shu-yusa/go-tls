@@ -82,3 +82,5 @@ Below is a sequence diagram illustrating the handshake process:
 ## References
 
 For more detailed information about TLS 1.3, refer to [RFC 8446](https://tools.ietf.org/html/rfc8446).
+
+Presentation slide for this code: [Learning-TLS1.3-with-Go.pdf](./Learning-TLS1.3-with-Go.pdf)
