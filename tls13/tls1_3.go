@@ -157,7 +157,7 @@ type (
 
 	RenegotiationInfoExtension struct {
 		Length                 uint8
-		RegegotiatedConnection []byte
+		RenegotiatedConnection []byte
 	}
 
 	ProtocolName  []byte
@@ -794,7 +794,7 @@ func (ch ClientHelloMessage) ParseExtensions(logger *log.Logger) map[ExtensionTy
 			if length > 0 {
 				extensionMap[RenegotiationInfoExtensionType] = RenegotiationInfoExtension{
 					Length:                 length,
-					RegegotiatedConnection: extension.Data[1:length],
+					RenegotiatedConnection: extension.Data[1:length],
 				}
 				logger.Printf("    Renegotiated Connection: %x\n", extension.Data[1:])
 			}
