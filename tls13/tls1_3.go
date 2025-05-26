@@ -849,13 +849,13 @@ func GenerateSecrets(hash func() hash.Hash, curve ecdh.Curve, clientPublicKeyByt
 	if err != nil {
 		return nil, err
 	}
-	handshakeSecret := hkdf.Extract(hash, sharedSecret, secretState)
+	handshakeSecret := hkdf.Extract(hash, secretState, sharedSecret)
 
 	secretState, err = DeriveSecret(hash, handshakeSecret, "derived", [][]byte{})
 	if err != nil {
 		return nil, err
 	}
-	masterSecret := hkdf.Extract(hash, zero32, secretState)
+	masterSecret := hkdf.Extract(hash, secretState, zero32)
 	return &Secrets{
 		Hash:            hash,
 		SharedSecret:    sharedSecret,
