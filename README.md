@@ -6,7 +6,7 @@ This project aims to deepen the understanding of TLS 1.3 by implementing a full 
 
 ## Prerequisites
 
-- Recommended to use **Go 1.22**. The implementation may work on lower versions, but no verification has been done.
+- Use **Go 1.27.1** or later. The `go` command automatically selects the version declared in `go.mod` when toolchain downloads are enabled.
 
 ## Installation and Running
 

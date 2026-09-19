@@ -3,7 +3,6 @@ package tls13
 import (
 	"crypto/rand"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -155,7 +154,7 @@ func handleMessage(
 		msgType := HandshakeType(tlsRecord.Fragment[0])
 		// extract 3 bytes
 		handshakeLength := (uint32(tlsRecord.Fragment[1]) << 16) | (uint32(tlsRecord.Fragment[2]) << 8) | uint32(tlsRecord.Fragment[3])
-		logger.Printf(fmt.Sprintf("Handshake Type: %s (%d)\n", HandshakeTypeName[msgType], msgType))
+		logger.Printf("Handshake Type: %s (%d)\n", HandshakeTypeName[msgType], msgType)
 		logger.Printf("Handshake message length: %d\n", handshakeLength)
 		switch msgType {
 		case ClientHello: // 0x01
@@ -194,7 +193,7 @@ func handleMessage(
 		case HandshakeRecord:
 			logger.Printf("Decrypted ApplicationData: %x\n", tlsInnerPlainText.Content)
 			msgType := HandshakeType(tlsInnerPlainText.Content[0])
-			logger.Printf(fmt.Sprintf("Handshake Type: %s (%d)\n", HandshakeTypeName[msgType], msgType))
+			logger.Printf("Handshake Type: %s (%d)\n", HandshakeTypeName[msgType], msgType)
 			// extract 3 bytes
 			handshakeLength := (uint32(tlsInnerPlainText.Content[1]) << 16) | (uint32(tlsInnerPlainText.Content[2]) << 8) | uint32(tlsInnerPlainText.Content[3])
 			logger.Printf("Handshake message length: %d bytes\n", handshakeLength)
