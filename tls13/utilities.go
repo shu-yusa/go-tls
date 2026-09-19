@@ -1,9 +1,8 @@
 package tls13
 
 import (
+	"crypto/hkdf"
 	"hash"
-
-	"golang.org/x/crypto/hkdf"
 )
 
 func TranscriptHash(hash func() hash.Hash, messages [][]byte) []byte {
@@ -21,13 +20,7 @@ func HKDFExpandLabel(hash func() hash.Hash, secret []byte, label string, content
 		Context: content,
 	}
 
-	hkdfExpand := hkdf.Expand(hash, secret, hkdflabel.Bytes())
-	derivedSecret := make([]byte, length)
-	_, err := hkdfExpand.Read(derivedSecret)
-	if err != nil {
-		return nil, err
-	}
-	return derivedSecret, nil
+	return hkdf.Expand(hash, secret, string(hkdflabel.Bytes()), length)
 }
 
 func DeriveSecret(hash func() hash.Hash, secret []byte, label string, messages [][]byte) ([]byte, error) {

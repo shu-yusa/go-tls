@@ -8,6 +8,7 @@ import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -15,8 +16,6 @@ import (
 	"fmt"
 	"hash"
 	"log"
-
-	"golang.org/x/crypto/hkdf"
 )
 
 type (
@@ -843,19 +842,28 @@ func GenerateSecrets(hash func() hash.Hash, curve ecdh.Curve, clientPublicKeyByt
 
 	// Early Secret
 	zero32 := make([]byte, hash().Size())
-	earlySecret := hkdf.Extract(hash, zero32, zero32)
+	earlySecret, err := hkdf.Extract(hash, zero32, zero32)
+	if err != nil {
+		return nil, err
+	}
 
 	secretState, err := DeriveSecret(hash, earlySecret, "derived", [][]byte{})
 	if err != nil {
 		return nil, err
 	}
-	handshakeSecret := hkdf.Extract(hash, sharedSecret, secretState)
+	handshakeSecret, err := hkdf.Extract(hash, sharedSecret, secretState)
+	if err != nil {
+		return nil, err
+	}
 
 	secretState, err = DeriveSecret(hash, handshakeSecret, "derived", [][]byte{})
 	if err != nil {
 		return nil, err
 	}
-	masterSecret := hkdf.Extract(hash, zero32, secretState)
+	masterSecret, err := hkdf.Extract(hash, zero32, secretState)
+	if err != nil {
+		return nil, err
+	}
 	return &Secrets{
 		Hash:            hash,
 		SharedSecret:    sharedSecret,
