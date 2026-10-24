@@ -36,8 +36,10 @@ func (c TLSContext) FinishedHandshake() bool {
 }
 
 var (
-	// This TLS server only supports HTTP GET request to the root path
-	acceptableGetRequest = "GET / HTTP/1.1\r\nHost: localhost\r\n"
+	// This TLS server only supports HTTP GET to the root path.
+	// Host is not part of the check because it depends on how the client
+	// addresses the server (curl sends the hostname from the URL).
+	acceptableGetRequest = "GET / HTTP/1.1\r\n"
 	internalErrorAlert   = Alert{Level: fatal, Description: internal_error}
 )
 
@@ -82,14 +84,18 @@ func Server(logger *log.Logger) {
 					}
 					var key, iv []byte
 					var seqNum uint64
+					// Use the key and sequence number from the same phase
+					// (mirrors the receive path in the ApplicationDataRecord case).
 					if newTLSContext.FinishedHandshake() {
 						key = newTLSContext.ApplicationTrafficSecrets.ServerWriteKey
 						iv = newTLSContext.ApplicationTrafficSecrets.ServerWriteIV
-						seqNum = sequenceNumbers.HandshakeKeySeqNum
+						seqNum = sequenceNumbers.AppKeyServerSeqNum
+						sequenceNumbers.AppKeyServerSeqNum++
 					} else {
 						key = newTLSContext.HandshakeTrafficSecrets.ServerWriteKey
 						iv = newTLSContext.HandshakeTrafficSecrets.ServerWriteIV
-						seqNum = sequenceNumbers.AppKeyServerSeqNum
+						seqNum = sequenceNumbers.HandshakeKeySeqNum
+						sequenceNumbers.HandshakeKeySeqNum++
 					}
 					encryptedResponse, _ := NewTLSCipherMessageText(
 						key,

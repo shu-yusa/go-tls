@@ -3,6 +3,7 @@ package tls13
 import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/tls"
 	"io"
@@ -139,14 +140,18 @@ func HandleClientHello(
 		logger.Println("Error in loading server certificate:", err)
 		return nil, &internalErrorAlert
 	}
+	// Send the whole chain (leaf first, then intermediates) in the order
+	// they appear in server.crt. Sending only the leaf makes clients fail
+	// with "unable to get local issuer certificate".
+	certList := make([]CertificateEntry, 0, len(serverCert.Certificate))
+	for _, der := range serverCert.Certificate {
+		certList = append(certList, CertificateEntry{CertType: X509, CertData: der})
+	}
+	logger.Printf("Sending certificate chain: %d certs\n", len(certList))
+
 	certificateMessage := CertificateMessage{
 		CertificateRequestContext: []byte{},
-		CertificateList: []CertificateEntry{
-			{
-				CertType: X509,
-				CertData: serverCert.Certificate[0],
-			},
-		},
+		CertificateList:           certList,
 	}
 	handshakeCertificate := Handshake[CertificateMessage]{
 		MsgType:          Certificate,
@@ -190,11 +195,23 @@ func HandleClientHello(
 		return nil, &internalErrorAlert
 	}
 	var algorithm SignatureScheme
-	switch serverCert.PrivateKey.(type) {
+	switch key := serverCert.PrivateKey.(type) {
 	case ed25519.PrivateKey:
 		algorithm = ED25519
 	case *ecdsa.PrivateKey:
-		algorithm = ECDSA_SECP256R1_SHA256
+		// The signature algorithm must match the key's curve
+		// (RFC 8446 Section 4.4.3).
+		switch key.Curve {
+		case elliptic.P256():
+			algorithm = ECDSA_SECP256R1_SHA256
+		case elliptic.P384():
+			algorithm = ECDSA_SECP384R1_SHA384
+		case elliptic.P521():
+			algorithm = ECDSA_SECP521R1_SHA512
+		default:
+			logger.Println("Unsupported ECDSA curve:", key.Curve.Params().Name)
+			return nil, &Alert{Level: fatal, Description: handshake_failure}
+		}
 	default:
 		logger.Println("Unsupported signature algorithm")
 		return nil, &Alert{Level: fatal, Description: handshake_failure}

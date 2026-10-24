@@ -8,10 +8,12 @@ import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
 	"hash"
@@ -1018,8 +1020,23 @@ func SignCertificate(hash func() hash.Hash, priv crypto.PrivateKey, handshakeMes
 		// For Ed25519, the hashing is done internally, so we directly pass the message to be signed.
 		return ed25519.Sign(privKey, signatureTarget), nil
 	case *ecdsa.PrivateKey:
-		hashed := sha256.Sum256(signatureTarget)
-		return ecdsa.SignASN1(rand.Reader, privKey, hashed[:])
+		// The digest used for signing is determined by the key's curve
+		// (RFC 8446 Section 4.4.3): P-256 -> SHA-256, P-384 -> SHA-384, P-521 -> SHA-512.
+		var digest []byte
+		switch privKey.Curve {
+		case elliptic.P256():
+			h := sha256.Sum256(signatureTarget)
+			digest = h[:]
+		case elliptic.P384():
+			h := sha512.Sum384(signatureTarget)
+			digest = h[:]
+		case elliptic.P521():
+			h := sha512.Sum512(signatureTarget)
+			digest = h[:]
+		default:
+			return nil, fmt.Errorf("unsupported curve: %s", privKey.Curve.Params().Name)
+		}
+		return ecdsa.SignASN1(rand.Reader, privKey, digest)
 	default:
 		return nil, fmt.Errorf("unsupported private key type: %T", priv)
 	}
